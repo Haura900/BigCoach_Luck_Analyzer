@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 9;
+  const CACHE_VERSION = 10;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
