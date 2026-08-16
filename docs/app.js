@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 10;
+  const CACHE_VERSION = 11;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -22,6 +22,7 @@
     deal: "配牌時和了率",
     rankDeal: "配牌時平着変動",
     defense: "放銃予実幅",
+    supportedDealInLoss: "AI支持打牌・放銃失点",
     dora: "ドラツモ率",
     effective: "有効牌ツモ率",
     effective2: "2シャンテン時有効牌",
@@ -170,6 +171,12 @@
         deal: round.deal ? { value: Number(round.deal.value) } : null,
         rankDeal: round.rankDeal ? { value: Number(round.rankDeal.value) } : null,
         defense: compactEvents(round.defense),
+        supportedDealInLoss: round.supportedDealInLoss ? {
+          points: Number(round.supportedDealInLoss.points || 0),
+          recommendation: round.supportedDealInLoss.recommendation == null ? null : Number(round.supportedDealInLoss.recommendation),
+          aiTop: Boolean(round.supportedDealInLoss.aiTop),
+          threshold: Number(round.supportedDealInLoss.threshold || 0.10)
+        } : null,
         dora: compactEvents(round.dora),
         effective: compactEvents(round.effective),
         effective2: compactEvents(round.effective2),
@@ -557,6 +564,9 @@
     setExperienceMetric("deal", summary.deal, (result) => `平均和了予測 ${formatNumber(result.value * 100, 1)}%`);
     setExperienceMetric("rank", summary.rankDeal, (result) => `平均順位ショック ${signed(result.value, 3)}`);
     setExperienceMetric("defense", summary.defense, (result) => `実績放銃 ${formatNumber(result.observed, 0)} / 予測合計 ${formatNumber(result.predicted, 2)}（${result.events}打牌）`);
+    setExperienceMetric("supported-dealin-loss", summary.supportedDealInLoss, (result) =>
+      `AI支持放銃 ${result.events}局 / 合計 ${formatNumber(result.points, 0)}点（AI最推奨 ${result.aiTop}局 / 推奨度10%以上 ${result.recommended10}局）`
+    );
     setTheoryMetric("dora", summary.dora, "回");
     setTheoryMetric("effective", summary.effective, "回");
     setTheoryMetric("effective-2", summary.effective2, "回");
@@ -680,6 +690,7 @@
       { key: "deal", label: METRIC_LABELS.deal, color: "#d98d3b", width: 1.8 },
       { key: "rankDeal", label: METRIC_LABELS.rankDeal, color: "#b66a2b", width: 1.8 },
       { key: "defense", label: METRIC_LABELS.defense, color: "#b45145", width: 1.8 },
+      { key: "supportedDealInLoss", label: METRIC_LABELS.supportedDealInLoss, color: "#8c3f3f", width: 1.8 },
       { key: "dora", label: METRIC_LABELS.dora, color: "#287cb5", width: 1.8 },
       { key: "effective", label: METRIC_LABELS.effective, color: "#2d9aa0", width: 1.8 },
       { key: "effective2", label: METRIC_LABELS.effective2, color: "#23858d", width: 1.8 },

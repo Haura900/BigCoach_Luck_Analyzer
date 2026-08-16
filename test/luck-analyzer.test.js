@@ -52,7 +52,7 @@ test("Cauchy結合は有効なp値だけをまとめる", () => {
   assert.ok(combined > 0 && combined < 0.2);
 });
 
-test("BigCoach実例から29指標と理論ツモを抽出できる", () => {
+test("BigCoach実例から30指標と理論ツモを抽出できる", () => {
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data.json"), "utf8"));
   const record = analyzePayload(fixture, { title: "fixture", taskId: "fixture-task" });
   const summary = summarize([record]);
@@ -91,9 +91,42 @@ test("BigCoach実例から29指標と理論ツモを抽出できる", () => {
   assert.ok(record.rounds.some((round) => round.wasteDraw.length > 0));
   assert.ok(record.rounds.every((round) => Array.isArray(round.genbutsu1)));
   assert.ok(record.rounds.every((round) => Array.isArray(round.fuuroGenbutsu)));
-  assert.equal(summary.overall.totalComponents, 29);
+  assert.equal(summary.overall.totalComponents, 30);
   assert.equal(summary.overall.u, 0.5);
   assert.equal(summary.overall.distributionN, 1);
+});
+
+test("AI最推奨または推奨度10%以上の放銃失点だけを集計する", () => {
+  const makeRound = (kyoku, actualPai, details, loss) => ({
+    kyoku,
+    entries: [{ actual: { type: "dahai", actor: 0, pai: actualPai }, details }],
+    end_status: [{ type: "hora", actor: 1, target: 0, deltas: [-loss, loss, 0, 0] }]
+  });
+  const record = analyzePayload({
+    player_id: 0,
+    review: { kyokus: [
+      makeRound(0, "5m", [
+        { action: { type: "dahai", actor: 0, pai: "4m" }, prob: 0.70 },
+        { action: { type: "dahai", actor: 0, pai: "5m" }, prob: 0.12 }
+      ], 12000),
+      makeRound(1, "6p", [
+        { action: { type: "dahai", actor: 0, pai: "6p" }, prob: 0.08 },
+        { action: { type: "dahai", actor: 0, pai: "7p" }, prob: 0.05 }
+      ], 8000),
+      makeRound(2, "3s", [
+        { action: { type: "dahai", actor: 0, pai: "4s" }, prob: 0.80 },
+        { action: { type: "dahai", actor: 0, pai: "3s" }, prob: 0.05 }
+      ], 12000)
+    ] }
+  });
+  assert.equal(record.rounds[0].supportedDealInLoss.points, 12000);
+  assert.equal(record.rounds[0].supportedDealInLoss.aiTop, false);
+  assert.equal(record.rounds[1].supportedDealInLoss.points, 8000);
+  assert.equal(record.rounds[1].supportedDealInLoss.aiTop, true);
+  assert.equal(record.rounds[2].supportedDealInLoss, null);
+  const summary = summarize([record]);
+  assert.equal(summary.supportedDealInLoss.points, 20000);
+  assert.equal(summary.supportedDealInLoss.events, 2);
 });
 
 test("同じ元牌譜はモデル確率が変わってもgameIdが同じ", () => {
@@ -157,7 +190,8 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /id="record-select"/);
   assert.match(html, /id="ura-self-percentile"/);
   assert.match(html, /id="opponent-tenpai-win-percentile"/);
-  assert.match(html, /実際の着順、総合運、29指標の半荘別推移/);
+  assert.match(html, /実際の着順、総合運、30指標の半荘別推移/);
+  assert.match(html, /id="supported-dealin-loss-percentile"/);
   assert.match(html, /配牌時役牌対子・暗刻数/);
   assert.match(html, /表示する半荘数/);
   assert.match(html, /2シャンテン時有効牌ツモ率/);

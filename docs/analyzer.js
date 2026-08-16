@@ -11,14 +11,15 @@
   if (!core) throw new Error("MahjongLuckCore is required");
 
   const VERSION = 2;
-  const CALCULATION_VERSION = 9;
+  const CALCULATION_VERSION = 10;
+  const SUPPORTED_DEALIN_MIN_RECOMMENDATION = 0.10;
   const EXPERIENCE_MIN_POOL = 30;
   const DEFENSE_MIN_POOL = 30;
   const THEORY_MIN_N = 20;
   const RIICHI_MIN_N = 10;
   const SEAT_NAMES = ["東家", "南家", "西家", "北家"];
   const METRIC_KEYS = [
-    "deal", "rankDeal", "defense", "dora", "effective", "effective2", "effective1", "genbutsu", "genbutsu1", "genbutsuTenpai",
+    "deal", "rankDeal", "defense", "supportedDealInLoss", "dora", "effective", "effective2", "effective1", "genbutsu", "genbutsu1", "genbutsuTenpai",
     "fuuroGenbutsu", "fuuroGenbutsu1", "fuuroGenbutsuTenpai", "wasteDraw", "riichiWin", "riichiDealIn",
     "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
     "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialYakuhai", "initialDoraOpponent",
@@ -88,6 +89,52 @@
       if (normalized != null) return normalized;
     }
     return null;
+  }
+
+  function recommendationProbability(detail) {
+    for (const value of [
+      detail?.prob,
+      detail?.probability,
+      detail?.recommendation_prob,
+      detail?.recommendationProb,
+      detail?.policy_prob,
+      detail?.policyProb
+    ]) {
+      const normalized = clampProbability(value);
+      if (normalized != null) return normalized;
+    }
+    return null;
+  }
+
+  function aiSupportForActualAction(entry) {
+    const actual = actualDetail(entry);
+    if (!actual) return { supported: false, recommendation: null, aiTop: false };
+    const scored = (entry?.details || [])
+      .filter((item) => item?.action)
+      .map((item) => ({ detail: item, probability: recommendationProbability(item) }))
+      .filter((item) => item.probability != null);
+    const recommendation = recommendationProbability(actual);
+    const maximum = scored.length ? Math.max(...scored.map((item) => item.probability)) : null;
+    const explicitTop = actual?.best === true
+      || actual?.is_best === true
+      || actual?.isBest === true
+      || actual?.recommended === true
+      || [actual?.rank, actual?.recommendation_rank, actual?.recommendationRank].some((value) => Number(value) === 1);
+    const aiTop = explicitTop
+      || (recommendation != null && maximum != null && recommendation >= maximum - 1e-12);
+    return {
+      supported: aiTop || (recommendation != null && recommendation >= SUPPORTED_DEALIN_MIN_RECOMMENDATION),
+      recommendation,
+      aiTop
+    };
+  }
+
+  function dealInLossPoints(endStatus, hero) {
+    return (endStatus || []).reduce((sum, item) => {
+      if (item?.type !== "hora" || Number(item.target) !== hero || Number(item.actor) === hero) return sum;
+      const delta = Array.isArray(item.deltas) ? Number(item.deltas[hero]) : Number.NaN;
+      return sum + (Number.isFinite(delta) && delta < 0 ? -delta : 0);
+    }, 0);
   }
 
   function heroWins(endStatus, hero) {
@@ -231,6 +278,29 @@
         reason
       };
     }).filter(Boolean);
+  }
+
+  function analyzeSupportedDealInLoss(kyoku, hero) {
+    const endStatus = Array.isArray(kyoku?.end_status) ? kyoku.end_status : [];
+    if (!heroDealsIn(endStatus, hero)) return null;
+    const points = dealInLossPoints(endStatus, hero);
+    if (!(points > 0)) return null;
+
+    const entries = Array.isArray(kyoku?.entries) ? kyoku.entries : [];
+    const entry = [...entries].reverse().find((item) =>
+      item?.actual?.type === "dahai"
+      && (item.actual.actor == null || Number(item.actual.actor) === hero)
+    );
+    if (!entry) return null;
+
+    const support = aiSupportForActualAction(entry);
+    if (!support.supported) return null;
+    return {
+      points,
+      recommendation: support.recommendation,
+      aiTop: support.aiTop,
+      threshold: SUPPORTED_DEALIN_MIN_RECOMMENDATION
+    };
   }
 
   function remainingCounts(outside) {
@@ -662,6 +732,7 @@
           value: currentRank - expectedRank
         },
         defense: analyzeDefense(kyoku, hero),
+        supportedDealInLoss: analyzeSupportedDealInLoss(kyoku, hero),
         dora: theory.dora,
         effective: theory.effective,
         effective2: theory.effective2,
@@ -815,6 +886,7 @@
       deal: mean(validRounds.map((round) => round.deal?.value)),
       rankDeal: mean(validRounds.map((round) => round.rankDeal?.value)),
       defense: mean(validRounds.map(defenseRoundValue)),
+      supportedDealInLoss: -validRounds.reduce((sum, round) => sum + Number(round.supportedDealInLoss?.points || 0), 0),
       dora: martingale(validRounds.flatMap((round) => round.dora || []), 1).percentile,
       effective: martingale(validRounds.flatMap((round) => round.effective || []), 1).percentile,
       effective2: martingale(validRounds.flatMap((round) => round.effective2 || []), 1).percentile,
@@ -844,10 +916,18 @@
     };
   }
 
+  function rawUnitScoresForUnit(unit) {
+    const scores = rawUnitScores(unit?.rounds || []);
+    if (Number(unit?.calculationVersion || 0) < CALCULATION_VERSION) {
+      scores.supportedDealInLoss = null;
+    }
+    return scores;
+  }
+
   function scoreUnits(units, referenceUnits = units) {
-    const raw = units.map((unit) => rawUnitScores(unit.rounds || []));
-    const referenceRaw = referenceUnits === units ? raw : referenceUnits.map((unit) => rawUnitScores(unit.rounds || []));
-    const empiricalKeys = ["deal", "rankDeal", "defense", "otherWinAvoidLuck"];
+    const raw = units.map(rawUnitScoresForUnit);
+    const referenceRaw = referenceUnits === units ? raw : referenceUnits.map(rawUnitScoresForUnit);
+    const empiricalKeys = ["deal", "rankDeal", "defense", "supportedDealInLoss", "otherWinAvoidLuck"];
     const pools = Object.fromEntries(empiricalKeys.map((key) => [key, referenceRaw.map((row) => row[key]).filter(Number.isFinite)]));
     return units.map((unit, index) => {
       const { rounds, ...meta } = unit;
@@ -865,6 +945,7 @@
       id: record.id,
       importedAt: record.importedAt,
       title: record.title,
+      calculationVersion: Number(record.calculationVersion || 0),
       actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) ? Number(record.actualRank) : null,
       rounds: record.rounds || []
     }));
@@ -883,6 +964,7 @@
       importedAt: record.importedAt,
       title: record.title,
       roundLabel: round.label || `第${index + 1}局`,
+      calculationVersion: Number(record.calculationVersion || 0),
       actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) ? Number(record.actualRank) : null,
       rounds: [round]
     })));
@@ -1157,20 +1239,35 @@
     const initialDoraSelf = martingale(groupRoundEvents(selected, "initialDoraSelf"), 1);
     const initialYakuhai = martingale(groupRoundEvents(selected, "initialYakuhai"), 1);
     const initialDoraOpponent = martingale(groupRoundEvents(selected, "initialDoraOpponent"), -1);
-    const subjectRawScores = selected.map((record) => rawUnitScores(record.rounds || []));
-    const poolRawScores = allRecords.map((record) => rawUnitScores(record.rounds || []));
+    const subjectRawScores = selected.map((record) => rawUnitScoresForUnit({
+      calculationVersion: record.calculationVersion,
+      rounds: record.rounds || []
+    }));
+    const poolRawScores = allRecords.map((record) => rawUnitScoresForUnit({
+      calculationVersion: record.calculationVersion,
+      rounds: record.rounds || []
+    }));
     const experienceOutcomeMetric = (key) => empiricalMetric(
       subjectRawScores.map((row) => row[key]),
       poolRawScores.map((row) => row[key]),
       EXPERIENCE_MIN_POOL,
       `${key}:${selectedId || "all"}`
     );
+    const supportedDealInLoss = experienceOutcomeMetric("supportedDealInLoss");
+    const supportedDealIns = subjectRounds.map((round) => round.supportedDealInLoss).filter(Boolean);
+    supportedDealInLoss.points = supportedDealIns.reduce((sum, item) => sum + Number(item.points || 0), 0);
+    supportedDealInLoss.events = supportedDealIns.length;
+    supportedDealInLoss.aiTop = supportedDealIns.filter((item) => item.aiTop).length;
+    supportedDealInLoss.recommended10 = supportedDealIns.filter((item) =>
+      !item.aiTop && Number(item.recommendation) >= SUPPORTED_DEALIN_MIN_RECOMMENDATION
+    ).length;
     const otherWinAvoidLuck = experienceOutcomeMetric("otherWinAvoidLuck");
 
     const individual = [
       { key: "deal", label: "配牌和了率", score: deal.percentile, included: deal.included, reason: `経験分布 ${deal.poolN}/${deal.minimum}局` },
       { key: "rankDeal", label: "配牌時平着変動", score: rankDeal.percentile, included: rankDeal.included, reason: `経験分布 ${rankDeal.poolN}/${rankDeal.minimum}局` },
       { key: "defense", label: "放銃予実幅", score: defense.percentile, included: defense.included, reason: `経験分布 ${defense.poolN}/${defense.minimum}局` },
+      { key: "supportedDealInLoss", label: "AI支持打牌・放銃失点", score: supportedDealInLoss.percentile, included: supportedDealInLoss.included, reason: `経験分布 ${supportedDealInLoss.poolN}/${supportedDealInLoss.minimum}対局` },
       { key: "dora", label: "ドラツモ", score: dora.percentile, included: dora.n >= THEORY_MIN_N, reason: `対象 ${dora.n}/${THEORY_MIN_N}ツモ` },
       { key: "effective", label: "有効牌ツモ", score: effective.percentile, included: effective.n >= THEORY_MIN_N, reason: `対象 ${effective.n}/${THEORY_MIN_N}ツモ` },
       { key: "effective2", label: "2シャンテン時有効牌", score: effective2.percentile, included: effective2.n >= THEORY_MIN_N, reason: `対象 ${effective2.n}/${THEORY_MIN_N}ツモ` },
@@ -1201,7 +1298,7 @@
     const component = Object.fromEntries(individual.map((item) => [item.key, item]));
     const families = [
       { key: "initial", label: "配牌", items: [component.deal, component.rankDeal] },
-      { key: "defense", label: "守備", items: [component.defense, component.genbutsu, component.genbutsu1, component.genbutsuTenpai, component.fuuroGenbutsu, component.fuuroGenbutsu1, component.fuuroGenbutsuTenpai] },
+      { key: "defense", label: "守備", items: [component.defense, component.supportedDealInLoss, component.genbutsu, component.genbutsu1, component.genbutsuTenpai, component.fuuroGenbutsu, component.fuuroGenbutsu1, component.fuuroGenbutsuTenpai] },
       { key: "draw", label: "自分の牌運", items: [component.initialDoraSelf, component.initialYakuhai, component.dora, component.effective, component.effective2, component.effective1, component.wasteDraw, component.selfTenpaiEntry, component.selfTenpaiWin] },
       { key: "riichi", label: "自分リーチ後", items: [component.riichiWin, component.riichiDealIn, component.riichiHitOpponent, component.uraSelf] },
       { key: "opponents", label: "他家の運", items: [component.initialDoraOpponent, component.opponentDora, component.opponentTenpaiEntry, component.opponentTenpaiWin, component.opponentRiichiWin, component.uraOpponent] },
@@ -1268,6 +1365,7 @@
       { key: "dealFit", label: "配牌和了率：経験分布適合", pValue: deal.included ? deal.pValue : null, n: deal.n, method: "経験分布bootstrap" },
       { key: "rankFit", label: "配牌時平着変動：経験分布適合", pValue: rankDeal.included ? rankDeal.pValue : null, n: rankDeal.n, method: "経験分布bootstrap" },
       { key: "defenseFit", label: "放銃予実幅：経験分布適合", pValue: defense.included ? defense.pValue : null, n: defense.n, method: "経験分布bootstrap" },
+      { key: "supportedDealInLossFit", label: "AI支持打牌・放銃失点：経験分布適合", pValue: supportedDealInLoss.included ? supportedDealInLoss.pValue : null, n: supportedDealInLoss.n, method: "BigCoach推奨度×実失点×経験分布" },
       { key: "otherWinAvoidLuckFit", label: "他家決着回避残差：経験分布適合", pValue: otherWinAvoidLuck.included ? otherWinAvoidLuck.pValue : null, n: otherWinAvoidLuck.n, method: "BigCoach予測×経験分布" },
       { key: "dealSeat", label: "配牌和了率 × 親からの席順", pValue: dealSeat.pValue, n: dealSeat.n, method: "半荘内置換検定" },
       { key: "dealSerial", label: "配牌和了率の局間連続性", pValue: dealSerial.pValue, n: dealSerial.n, method: "半荘内順序置換" },
@@ -1294,6 +1392,7 @@
       deal,
       rankDeal,
       defense,
+      supportedDealInLoss,
       dora,
       effective,
       effective2,
