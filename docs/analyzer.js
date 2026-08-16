@@ -11,7 +11,7 @@
   if (!core) throw new Error("MahjongLuckCore is required");
 
   const VERSION = 2;
-  const CALCULATION_VERSION = 7;
+  const CALCULATION_VERSION = 8;
   const EXPERIENCE_MIN_POOL = 30;
   const DEFENSE_MIN_POOL = 30;
   const THEORY_MIN_N = 20;
@@ -21,7 +21,7 @@
     "deal", "rankDeal", "defense", "dora", "effective", "effective2", "effective1", "genbutsu", "genbutsu1", "genbutsuTenpai",
     "fuuroGenbutsu", "fuuroGenbutsu1", "fuuroGenbutsuTenpai", "wasteDraw", "riichiWin", "riichiDealIn",
     "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
-    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent",
+    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialYakuhai", "initialDoraOpponent",
     "otherWinAvoidLuck"
   ];
 
@@ -240,7 +240,7 @@
         supported: false, dora: [], effective: [], effective2: [], effective1: [], genbutsu: [], genbutsu1: [], genbutsuTenpai: [],
         fuuroGenbutsu: [], fuuroGenbutsu1: [], fuuroGenbutsuTenpai: [], wasteDraw: [], riichiWin: [], riichiDealIn: [],
         riichiHitOpponent: [], uraSelf: [], opponentDora: [], opponentRiichiWin: [], uraOpponent: [],
-        selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], seat: null
+        selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialYakuhai: [], initialDoraOpponent: [], seat: null
       };
     }
     const hands = start.tehais.map((hand) => Array.isArray(hand) ? [...hand] : []);
@@ -261,7 +261,7 @@
       supported: true, dora: [], effective: [], effective2: [], effective1: [], genbutsu: [], genbutsu1: [], genbutsuTenpai: [],
       fuuroGenbutsu: [], fuuroGenbutsu1: [], fuuroGenbutsuTenpai: [], wasteDraw: [], riichiWin: [], riichiDealIn: [],
       riichiHitOpponent: [], uraSelf: [], opponentDora: [], opponentRiichiWin: [], uraOpponent: [],
-      selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], seat
+      selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialYakuhai: [], initialDoraOpponent: [], seat
     };
 
     function addOutside(tile) {
@@ -345,6 +345,53 @@
       return exposure(draws * populationMean, observed, { v: variance, tiles: draws });
     }
 
+    function choose(n, k) {
+      if (!Number.isInteger(n) || !Number.isInteger(k) || k < 0 || k > n) return 0;
+      const size = Math.min(k, n - k);
+      let value = 1;
+      for (let index = 1; index <= size; index += 1) value = value * (n - size + index) / index;
+      return value;
+    }
+
+    function initialYakuhaiExposure(tiles) {
+      const roundWind = core.tile34(start.bakaze);
+      const yakuhaiIds = [...new Set([31, 32, 33, 27 + seatIndex, roundWind].filter((id) => id >= 27 && id <= 33))];
+      const markerCounts = core.counts34(doraMarkers);
+      const population = 136 - doraMarkers.length;
+      const draws = Math.min(tiles.length, population);
+      const denominator = choose(population, draws);
+      if (!draws || !denominator || !yakuhaiIds.length) return null;
+      const available = Object.fromEntries(yakuhaiIds.map((id) => [id, Math.max(0, 4 - markerCounts[id])]));
+      const pairProbability = (copies) => {
+        let probability = 0;
+        for (let count = 2; count <= Math.min(copies, draws); count += 1) {
+          probability += choose(copies, count) * choose(population - copies, draws - count) / denominator;
+        }
+        return probability;
+      };
+      const probabilities = Object.fromEntries(yakuhaiIds.map((id) => [id, pairProbability(available[id])]));
+      const expected = yakuhaiIds.reduce((sum, id) => sum + probabilities[id], 0);
+      let variance = yakuhaiIds.reduce((sum, id) => sum + probabilities[id] * (1 - probabilities[id]), 0);
+      for (let left = 0; left < yakuhaiIds.length; left += 1) {
+        for (let right = left + 1; right < yakuhaiIds.length; right += 1) {
+          const first = yakuhaiIds[left], second = yakuhaiIds[right];
+          let joint = 0;
+          for (let firstCount = 2; firstCount <= Math.min(available[first], draws); firstCount += 1) {
+            for (let secondCount = 2; secondCount <= Math.min(available[second], draws - firstCount); secondCount += 1) {
+              joint += choose(available[first], firstCount)
+                * choose(available[second], secondCount)
+                * choose(population - available[first] - available[second], draws - firstCount - secondCount)
+                / denominator;
+            }
+          }
+          variance += 2 * (joint - probabilities[first] * probabilities[second]);
+        }
+      }
+      const handCounts = core.counts34(tiles);
+      const observed = yakuhaiIds.filter((id) => handCounts[id] >= 2).length;
+      return exposure(expected, observed, { v: Math.max(0, variance), tiles: draws, yakuhaiTypes: yakuhaiIds.length });
+    }
+
     function uraExposure(event) {
       const markers = Array.isArray(event?.ura_markers) ? event.ura_markers : [];
       const actor = Number(event?.actor);
@@ -378,8 +425,10 @@
     }
 
     const selfInitialDora = initialDoraExposure(hands[hero] || []);
+    const selfInitialYakuhai = initialYakuhaiExposure(hands[hero] || []);
     const opponentInitialDora = initialDoraExposure(hands.flatMap((hand, player) => player === hero ? [] : hand));
     if (selfInitialDora) result.initialDoraSelf.push(selfInitialDora);
+    if (selfInitialYakuhai) result.initialYakuhai.push(selfInitialYakuhai);
     if (opponentInitialDora) result.initialDoraOpponent.push(opponentInitialDora);
 
     for (const event of events.slice(1)) {
@@ -620,6 +669,7 @@
         selfTenpaiEntry: theory.selfTenpaiEntry,
         opponentTenpaiEntry: theory.opponentTenpaiEntry,
         initialDoraSelf: theory.initialDoraSelf,
+        initialYakuhai: theory.initialYakuhai,
         initialDoraOpponent: theory.initialDoraOpponent,
         ...outcomes,
         theorySupported: theory.supported
@@ -772,6 +822,7 @@
       selfTenpaiEntry: martingale(validRounds.flatMap((round) => round.selfTenpaiEntry || []), 1).percentile,
       opponentTenpaiEntry: martingale(validRounds.flatMap((round) => round.opponentTenpaiEntry || []), -1).percentile,
       initialDoraSelf: martingale(validRounds.flatMap((round) => round.initialDoraSelf || []), 1).percentile,
+      initialYakuhai: martingale(validRounds.flatMap((round) => round.initialYakuhai || []), 1).percentile,
       initialDoraOpponent: martingale(validRounds.flatMap((round) => round.initialDoraOpponent || []), -1).percentile,
       otherWinAvoidLuck: martingale(validRounds.flatMap((round) => round.otherWinAvoidLuck || []), -1).luckZ ?? 0
     };
@@ -1088,6 +1139,7 @@
     const selfTenpaiEntry = martingale(groupRoundEvents(selected, "selfTenpaiEntry"), 1);
     const opponentTenpaiEntry = martingale(groupRoundEvents(selected, "opponentTenpaiEntry"), -1);
     const initialDoraSelf = martingale(groupRoundEvents(selected, "initialDoraSelf"), 1);
+    const initialYakuhai = martingale(groupRoundEvents(selected, "initialYakuhai"), 1);
     const initialDoraOpponent = martingale(groupRoundEvents(selected, "initialDoraOpponent"), -1);
     const subjectRawScores = selected.map((record) => rawUnitScores(record.rounds || []));
     const poolRawScores = allRecords.map((record) => rawUnitScores(record.rounds || []));
@@ -1125,7 +1177,8 @@
       { key: "opponentTenpaiWin", label: "他家テンパイ和了回避", score: opponentTenpaiWin.percentile, included: opponentTenpaiWin.n >= RIICHI_MIN_N, reason: `対象 ${opponentTenpaiWin.n}/${RIICHI_MIN_N}他家ツモ` },
       { key: "selfTenpaiEntry", label: "テンパイ到達ツモ", score: selfTenpaiEntry.percentile, included: selfTenpaiEntry.n >= THEORY_MIN_N, reason: `対象 ${selfTenpaiEntry.n}/${THEORY_MIN_N}一向聴ツモ` },
       { key: "opponentTenpaiEntry", label: "他家テンパイ到達回避", score: opponentTenpaiEntry.percentile, included: opponentTenpaiEntry.n >= THEORY_MIN_N, reason: `対象 ${opponentTenpaiEntry.n}/${THEORY_MIN_N}他家一向聴ツモ` },
-      { key: "initialDoraSelf", label: "自分配牌ドラ", score: initialDoraSelf.percentile, included: initialDoraSelf.n >= THEORY_MIN_N, reason: `対象 ${initialDoraSelf.n}/${THEORY_MIN_N}局` },
+      { key: "initialDoraSelf", label: "配牌時ドラ枚数", score: initialDoraSelf.percentile, included: initialDoraSelf.n >= THEORY_MIN_N, reason: `対象 ${initialDoraSelf.n}/${THEORY_MIN_N}局` },
+      { key: "initialYakuhai", label: "配牌時役牌対子・暗刻", score: initialYakuhai.percentile, included: initialYakuhai.n >= THEORY_MIN_N, reason: `対象 ${initialYakuhai.n}/${THEORY_MIN_N}局` },
       { key: "initialDoraOpponent", label: "他家配牌ドラ回避", score: initialDoraOpponent.percentile, included: initialDoraOpponent.n >= THEORY_MIN_N, reason: `対象 ${initialDoraOpponent.n}/${THEORY_MIN_N}局` },
       { key: "otherWinAvoidLuck", label: "他家決着回避上振れ", score: otherWinAvoidLuck.percentile, included: otherWinAvoidLuck.included, reason: `経験分布 ${otherWinAvoidLuck.poolN}/${otherWinAvoidLuck.minimum}対局` }
     ];
@@ -1133,7 +1186,7 @@
     const families = [
       { key: "initial", label: "配牌", items: [component.deal, component.rankDeal] },
       { key: "defense", label: "守備", items: [component.defense, component.genbutsu, component.genbutsu1, component.genbutsuTenpai, component.fuuroGenbutsu, component.fuuroGenbutsu1, component.fuuroGenbutsuTenpai] },
-      { key: "draw", label: "自分の牌運", items: [component.initialDoraSelf, component.dora, component.effective, component.effective2, component.effective1, component.wasteDraw, component.selfTenpaiEntry, component.selfTenpaiWin] },
+      { key: "draw", label: "自分の牌運", items: [component.initialDoraSelf, component.initialYakuhai, component.dora, component.effective, component.effective2, component.effective1, component.wasteDraw, component.selfTenpaiEntry, component.selfTenpaiWin] },
       { key: "riichi", label: "自分リーチ後", items: [component.riichiWin, component.riichiDealIn, component.riichiHitOpponent, component.uraSelf] },
       { key: "opponents", label: "他家の運", items: [component.initialDoraOpponent, component.opponentDora, component.opponentTenpaiEntry, component.opponentTenpaiWin, component.opponentRiichiWin, component.uraOpponent] },
       { key: "outcome", label: "他家の局結果", items: [component.otherWinAvoidLuck] }
@@ -1189,7 +1242,8 @@
       { key: "opponentTenpaiWinCalibration", label: "他家テンパイ和了牌：理論値との一致", pValue: opponentTenpaiWin.n >= RIICHI_MIN_N ? opponentTenpaiWin.pValue : null, n: opponentTenpaiWin.n, method: "逐次確率残差" },
       { key: "selfTenpaiEntryCalibration", label: "テンパイ到達ツモ：理論値との一致", pValue: selfTenpaiEntry.n >= THEORY_MIN_N ? selfTenpaiEntry.pValue : null, n: selfTenpaiEntry.n, method: "逐次確率残差" },
       { key: "opponentTenpaiEntryCalibration", label: "他家テンパイ到達：理論値との一致", pValue: opponentTenpaiEntry.n >= THEORY_MIN_N ? opponentTenpaiEntry.pValue : null, n: opponentTenpaiEntry.n, method: "逐次確率残差" },
-      { key: "initialDoraSelfCalibration", label: "自分配牌ドラ：理論値との一致", pValue: initialDoraSelf.n >= THEORY_MIN_N ? initialDoraSelf.pValue : null, n: initialDoraSelf.n, method: "有限母集団残差" },
+      { key: "initialDoraSelfCalibration", label: "配牌時ドラ枚数：理論値との一致", pValue: initialDoraSelf.n >= THEORY_MIN_N ? initialDoraSelf.pValue : null, n: initialDoraSelf.n, method: "有限母集団残差" },
+      { key: "initialYakuhaiCalibration", label: "配牌時役牌対子・暗刻：理論値との一致", pValue: initialYakuhai.n >= THEORY_MIN_N ? initialYakuhai.pValue : null, n: initialYakuhai.n, method: "有限母集団残差" },
       { key: "initialDoraOpponentCalibration", label: "他家配牌ドラ：理論値との一致", pValue: initialDoraOpponent.n >= THEORY_MIN_N ? initialDoraOpponent.pValue : null, n: initialDoraOpponent.n, method: "有限母集団残差" },
       { key: "seat", label: "有効牌残差 × 親からの席順", pValue: seatTest.pValue, n: seatTest.n, method: "半荘内置換検定" },
       { key: "serial", label: "有効牌残差の局間連続性", pValue: serialTest.pValue, n: serialTest.n, method: "半荘内順序置換" }
@@ -1247,6 +1301,7 @@
       selfTenpaiEntry,
       opponentTenpaiEntry,
       initialDoraSelf,
+      initialYakuhai,
       initialDoraOpponent,
       otherWinAvoidLuck,
       overall: {

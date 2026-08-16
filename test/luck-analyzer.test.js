@@ -52,7 +52,7 @@ test("Cauchy結合は有効なp値だけをまとめる", () => {
   assert.ok(combined > 0 && combined < 0.2);
 });
 
-test("BigCoach実例から28指標と理論ツモを抽出できる", () => {
+test("BigCoach実例から29指標と理論ツモを抽出できる", () => {
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data.json"), "utf8"));
   const record = analyzePayload(fixture, { title: "fixture", taskId: "fixture-task" });
   const summary = summarize([record]);
@@ -70,6 +70,10 @@ test("BigCoach実例から28指標と理論ツモを抽出できる", () => {
   assert.ok(summary.selfTenpaiEntry.n > 0);
   assert.ok(summary.opponentTenpaiEntry.n > 0);
   assert.ok(summary.initialDoraSelf.n > 0);
+  assert.ok(summary.initialYakuhai.n > 0);
+  assert.equal(record.rounds[0].initialYakuhai[0].y, 2);
+  assert.ok(record.rounds[0].initialYakuhai[0].p > 0);
+  assert.ok(record.rounds[0].initialYakuhai[0].v > 0);
   assert.ok(summary.initialDoraOpponent.n > 0);
   assert.equal(record.players.length, 4);
   assert.equal(record.opponents.length, 3);
@@ -87,7 +91,7 @@ test("BigCoach実例から28指標と理論ツモを抽出できる", () => {
   assert.ok(record.rounds.some((round) => round.wasteDraw.length > 0));
   assert.ok(record.rounds.every((round) => Array.isArray(round.genbutsu1)));
   assert.ok(record.rounds.every((round) => Array.isArray(round.fuuroGenbutsu)));
-  assert.equal(summary.overall.totalComponents, 28);
+  assert.equal(summary.overall.totalComponents, 29);
   assert.equal(summary.overall.u, 0.5);
   assert.equal(summary.overall.distributionN, 1);
 });
@@ -122,7 +126,9 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /id="record-select"/);
   assert.match(html, /id="ura-self-percentile"/);
   assert.match(html, /id="opponent-tenpai-win-percentile"/);
-  assert.match(html, /実際の着順、総合運、28指標/);
+  assert.match(html, /実際の着順、総合運、29指標の半荘別推移/);
+  assert.match(html, /配牌時役牌対子・暗刻数/);
+  assert.match(html, /表示する半荘数/);
   assert.match(html, /2シャンテン時有効牌ツモ率/);
   assert.match(html, /被副露・聴牌時現物掴み率/);
   assert.match(html, /無駄ツモ率/);
@@ -134,9 +140,11 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(app, /analysis-cache/);
   assert.match(app, /validationCorrelation/);
   assert.match(app, /initializeTrendSelection\(model\.weights\)/);
+  assert.match(app, /recordMetricScores\(chronological\)/);
+  assert.doesNotMatch(app, /roundMetricScores\(chronological\)/);
   assert.match(app, /\.slice\(0, 5\)/);
   assert.match(app, /actualRankPlot/);
-  assert.match(app, /empiricalPercentile\(rawOverallScores\[roundIndex\], rawOverallScores\)/);
+  assert.match(app, /empiricalPercentile\(rawOverallScores\[gameIndex\], rawOverallScores\)/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });
 
@@ -179,10 +187,10 @@ test("実着順との相関重みは非負で合計1になる", () => {
         id: `rank-${rank}-${repeat}`,
         importedAt: new Date(2026, 0, records.length + 1).toISOString(),
         actualRank: rank,
-        rounds: [{
+        rounds: Array.from({ length: 2 }, () => ({
           effective: Array.from({ length: 4 }, (_, index) => ({ p: 0.5, y: index < wins ? 1 : 0 })),
           defense: [], dora: [], genbutsu: [], riichiWin: [], riichiDealIn: []
-        }]
+        }))
       });
     }
   }

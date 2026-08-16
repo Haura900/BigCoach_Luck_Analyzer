@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 8;
+  const CACHE_VERSION = 9;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -43,7 +43,8 @@
     opponentTenpaiWin: "他家和了牌ツモ回避",
     selfTenpaiEntry: "テンパイ到達ツモ",
     opponentTenpaiEntry: "他家テンパイ到達回避",
-    initialDoraSelf: "自分配牌ドラ",
+    initialDoraSelf: "配牌時ドラ枚数",
+    initialYakuhai: "配牌時役牌対子・暗刻",
     initialDoraOpponent: "他家配牌ドラ回避",
     otherWinAvoidLuck: "他家決着回避上振れ"
   };
@@ -187,6 +188,7 @@
         selfTenpaiEntry: compactEvents(round.selfTenpaiEntry),
         opponentTenpaiEntry: compactEvents(round.opponentTenpaiEntry),
         initialDoraSelf: compactEvents(round.initialDoraSelf),
+        initialYakuhai: compactEvents(round.initialYakuhai),
         initialDoraOpponent: compactEvents(round.initialDoraOpponent),
         otherWinAvoidLuck: compactEvents(round.otherWinAvoidLuck),
         theorySupported: Boolean(round.theorySupported)
@@ -533,15 +535,15 @@
             : overall.score <= 30 ? "やや運が悪い" : "おおむね標準的";
     document.querySelector("#overall-detail").textContent = overall.score == null
       ? "総合運に入れられる指標がまだありません。"
-      : `${overall.included.length}/${overall.totalComponents}指標を非負係数で加重し、その加重点を${overall.distributionN}対局の同時経験分布へ通したU[0,1]です。指標間の重複・相関も保ちます。Uは上振れ方向の累積確率で、両側p値は${formatNumber(overall.pValue, 3)}です。`;
+      : `${overall.included.length}/${overall.totalComponents}指標を非負係数で加重し、その加重点を${overall.distributionN}半荘の同時経験分布へ通したU[0,1]です。指標間の重複・相関も保ちます。Uは上振れ方向の累積確率で、両側p値は${formatNumber(overall.pValue, 3)}です。`;
     const weightText = Object.entries(overall.weights || {})
       .filter(([, weight]) => Number(weight) >= 0.0005)
       .sort((left, right) => Number(right[1]) - Number(left[1]))
       .map(([key, weight]) => `${METRIC_LABELS[key]} ${formatNumber(weight * 100, 1)}%`)
       .join(" / ");
     document.querySelector("#overall-model").textContent = overall.fittedWeights
-      ? `目的変数=5−着順、対象なしはU=0.5で補完する非負リッジ回帰 · 対局後の説明相関: 5分割検証 r=${formatNumber(overall.validationCorrelation, 3)} / 学習内 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局、L2=${formatNumber(overall.ridgePenalty, 0)}）· 重み（0.05%未満は省略）: ${weightText}`
-      : `実着順を保存した対局が不足しているため均等重みです（${overall.correlationN}/20対局）。既存履歴は元の差分JSONを再取り込みすると着順が補完されます。`;
+      ? `1行=1半荘、目的変数=5−最終着順、対象なしはU=0.5で補完する非負リッジ回帰 · 半荘単位の説明相関: 5分割検証 r=${formatNumber(overall.validationCorrelation, 3)} / 学習内 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}半荘、L2=${formatNumber(overall.ridgePenalty, 0)}）· 重み（0.05%未満は省略）: ${weightText}`
+      : `実着順を保存した半荘が不足しているため均等重みです（${overall.correlationN}/20半荘）。既存履歴は元の差分JSONを再取り込みすると着順が補完されます。`;
     const overallComponents = document.querySelector("#overall-components");
     overallComponents.replaceChildren(
       ...overall.included.map((component) => overallChip(`${component.label} ${formatLuck(component.score)}`, false)),
@@ -573,6 +575,7 @@
     setTheoryMetric("self-tenpai-entry", summary.selfTenpaiEntry, "回");
     setTheoryMetric("opponent-tenpai-entry", summary.opponentTenpaiEntry, "回");
     setTheoryMetric("initial-dora-self", summary.initialDoraSelf, "枚");
+    setTheoryMetric("initial-yakuhai", summary.initialYakuhai, "組");
     setTheoryMetric("initial-dora-opponent", summary.initialDoraOpponent, "枚");
     setExperienceMetric("otherwin-avoid-luck", summary.otherWinAvoidLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
     renderFairness(summary.fairness);
@@ -653,17 +656,16 @@
       .map((item) => item.record);
     const model = analyzer.fitOutcomeWeights(chronological);
     initializeTrendSelection(model.weights);
-    const roundScores = analyzer.roundMetricScores(chronological);
-    const rawOverallScores = roundScores.map((row) => weightedRecordScore(row.scores, model.weights));
-    const allPoints = roundScores.map((row, roundIndex) => ({
-      roundIndex,
+    const recordScores = analyzer.recordMetricScores(chronological);
+    const rawOverallScores = recordScores.map((row) => weightedRecordScore(row.scores, model.weights));
+    const allPoints = recordScores.map((row, gameIndex) => ({
+      gameIndex,
       date: row.importedAt,
       title: row.title,
-      roundLabel: row.roundLabel,
       actualRank: row.actualRank,
       actualRankPlot: Number.isInteger(row.actualRank) ? (4 - row.actualRank) / 3 * 100 : null,
       ...row.scores,
-      overall: analyzer.empiricalPercentile(rawOverallScores[roundIndex], rawOverallScores)
+      overall: analyzer.empiricalPercentile(rawOverallScores[gameIndex], rawOverallScores)
     }));
     const limit = trendLimit === "all" ? allPoints.length : Number(trendLimit);
     const points = allPoints.slice(-Math.max(1, limit));
@@ -691,6 +693,7 @@
       { key: "selfTenpaiWin", label: METRIC_LABELS.selfTenpaiWin, color: "#6246a8", width: 1.8 },
       { key: "selfTenpaiEntry", label: METRIC_LABELS.selfTenpaiEntry, color: "#3f63ad", width: 1.8 },
       { key: "initialDoraSelf", label: METRIC_LABELS.initialDoraSelf, color: "#1f8aa6", width: 1.8 },
+      { key: "initialYakuhai", label: METRIC_LABELS.initialYakuhai, color: "#3c70a4", width: 1.8 },
       { key: "opponentDora", label: METRIC_LABELS.opponentDora, color: "#9b7b27", width: 1.8 },
       { key: "opponentRiichiWin", label: METRIC_LABELS.opponentRiichiWin, color: "#9a483f", width: 1.8 },
       { key: "uraOpponent", label: METRIC_LABELS.uraOpponent, color: "#be6b35", width: 1.8 },
@@ -736,14 +739,14 @@
         const date = new Date(entry.point.date).toLocaleDateString("ja-JP");
         const rank = entry.point.actualRank && item.key !== "actualRankPlot" ? ` · ${entry.point.actualRank}着` : "";
         const valueLabel = item.key === "actualRankPlot" ? `${entry.point.actualRank}着` : `U=${formatLuck(entry.value)}`;
-        circle.append(svgElement("title", {}, `${date} · ${entry.point.title} ${entry.point.roundLabel}${rank} · ${item.label} ${valueLabel}`));
+        circle.append(svgElement("title", {}, `${date} · ${entry.point.title}${rank} · ${item.label} ${valueLabel}`));
         elements.trendChart.append(circle);
       }
     }
     const first = points[0], last = points[points.length - 1];
     elements.trendChart.append(
-      svgElement("text", { x: left, y: 282, "text-anchor": "start", class: "trend-axis-label" }, `${new Date(first.date).toLocaleDateString("ja-JP")} · ${first.roundIndex + 1}局目`),
-      svgElement("text", { x: right, y: 282, "text-anchor": "end", class: "trend-axis-label" }, `${new Date(last.date).toLocaleDateString("ja-JP")} · ${last.roundIndex + 1}局目`)
+      svgElement("text", { x: left, y: 282, "text-anchor": "start", class: "trend-axis-label" }, `${new Date(first.date).toLocaleDateString("ja-JP")} · ${first.gameIndex + 1}半荘目`),
+      svgElement("text", { x: right, y: 282, "text-anchor": "end", class: "trend-axis-label" }, `${new Date(last.date).toLocaleDateString("ja-JP")} · ${last.gameIndex + 1}半荘目`)
     );
   }
 
