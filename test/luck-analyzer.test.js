@@ -173,7 +173,8 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.doesNotMatch(app, /historyBookmarklet\.addEventListener\("dragstart"/);
   assert.match(app, /navigator\.clipboard\.writeText\(historyBookmarkletUrl\)/);
   assert.match(app, /refresh=new Set\(__REFRESH__\)/);
-  assert.match(app, /done\[id\]&&!refresh\.has\(id\)/);
+  assert.match(app, /done\[id\]&&!\(repairPending&&refresh\.has\(id\)\)/);
+  assert.match(app, /localStorage\.setItem\(repairKey,'done'\)/);
   assert.match(app, /record\.calculationVersion !== analyzer\.CALCULATION_VERSION/);
   assert.match(app, /validationCorrelation/);
   assert.match(app, /initializeTrendSelection\(\)/);
