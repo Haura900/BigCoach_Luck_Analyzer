@@ -88,4 +88,6 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /ふだんは、こちらだけ使います/);
   assert.match(html, /id="trend-chart"/);
   assert.doesNotMatch(app, /const target='はうらC'/);
+  assert.match(app, /indexedDB\.open/);
+  assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });

@@ -3,8 +3,12 @@
 
   const STORAGE_KEY = "bigcoach-luck-analyzer:v2";
   const PLAYER_NAME_KEY = "bigcoach-luck-player-name";
+  const DATABASE_NAME = "bigcoach-luck-analyzer";
+  const DATABASE_VERSION = 1;
+  const RECORD_STORE = "records";
   const analyzer = window.LuckAnalyzer;
-  let records = loadRecords();
+  let records = [];
+  let databasePromise = null;
   let selectedId = null;
   let scope = "all";
 
@@ -76,17 +80,91 @@
     };
   }
 
-  function loadRecords() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-      return Array.isArray(parsed) ? parsed.filter((item) => item?.schemaVersion === analyzer.VERSION) : [];
-    } catch {
-      return [];
-    }
+  function openDatabase() {
+    if (databasePromise) return databasePromise;
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(RECORD_STORE)) database.createObjectStore(RECORD_STORE, { keyPath: "id" });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("IndexedDBを開けませんでした。"));
+    });
+    return databasePromise;
   }
 
-  function saveRecords() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  function compactEvents(events) {
+    return (events || []).map((event) => ({ p: Number(event.p), y: Number(event.y) }));
+  }
+
+  function compactRecord(record) {
+    return {
+      schemaVersion: record.schemaVersion,
+      id: record.id,
+      gameId: record.gameId,
+      title: record.title,
+      importedAt: record.importedAt,
+      gameLength: record.gameLength || "",
+      platform: record.platform || "",
+      table: record.table || "",
+      opponents: Array.isArray(record.opponents) ? record.opponents.slice(0, 3) : [],
+      rounds: (record.rounds || []).map((round) => ({
+        seat: round.seat,
+        deal: round.deal ? { value: Number(round.deal.value) } : null,
+        rankDeal: round.rankDeal ? { value: Number(round.rankDeal.value) } : null,
+        defense: compactEvents(round.defense),
+        dora: compactEvents(round.dora),
+        effective: compactEvents(round.effective),
+        genbutsu: compactEvents(round.genbutsu),
+        riichiWin: compactEvents(round.riichiWin),
+        riichiDealIn: compactEvents(round.riichiDealIn),
+        theorySupported: Boolean(round.theorySupported)
+      }))
+    };
+  }
+
+  async function loadRecords() {
+    if (!("indexedDB" in window)) throw new Error("このブラウザは大容量履歴保存に対応していません。IndexedDBが使えるブラウザをお使いください。");
+    const database = await openDatabase();
+    const stored = await new Promise((resolve, reject) => {
+      const request = database.transaction(RECORD_STORE, "readonly").objectStore(RECORD_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    const restored = stored
+      .sort((left, right) => Number(left.position) - Number(right.position))
+      .map((entry) => compactRecord(entry.record))
+      .filter((record) => record?.schemaVersion === analyzer.VERSION && Array.isArray(record.rounds));
+    if (restored.length) return restored;
+
+    let legacy = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      legacy = Array.isArray(parsed) ? parsed.filter((record) => record?.schemaVersion === analyzer.VERSION).map(compactRecord) : [];
+    } catch { /* broken legacy storage is ignored */ }
+    if (legacy.length) {
+      await saveRecords(legacy);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    return legacy;
+  }
+
+  async function saveRecords(nextRecords = records) {
+    const database = await openDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(RECORD_STORE, "readwrite");
+      const store = transaction.objectStore(RECORD_STORE);
+      store.clear();
+      nextRecords.forEach((record, position) => {
+        const compact = compactRecord(record);
+        store.put({ id: compact.id, position, record: compact });
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error("履歴を保存できませんでした。"));
+      transaction.onabort = () => reject(transaction.error || new Error("履歴の保存が中断されました。"));
+    });
+    localStorage.removeItem(STORAGE_KEY);
   }
 
   function setStatus(message, type = "") {
@@ -107,8 +185,8 @@
     });
   }
 
-  function addPayload(payload, meta = {}) {
-    const record = analyzer.analyzePayload(payload, meta);
+  async function addPayload(payload, meta = {}) {
+    const record = compactRecord(analyzer.analyzePayload(payload, meta));
     const existing = records.findIndex((item) =>
       (record.gameId && item.gameId === record.gameId) || item.id === record.id
     );
@@ -122,27 +200,28 @@
       scope = "selected";
       setStatus(`${record.rounds.length}局を解析し、この端末に保存しました。`, "success");
     }
-    saveRecords();
+    await saveRecords();
     render();
     document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function addBundle(bundle) {
+  async function addBundle(bundle) {
     const incoming = Array.isArray(bundle?.items) ? bundle.items : [];
     if (!incoming.length) throw new Error("一括取得ファイルに解析可能な牌譜がありません。");
     const added = [];
     let duplicates = 0;
     let failed = 0;
-    for (const item of incoming) {
+    for (let index = 0; index < incoming.length; index += 1) {
+      const item = incoming[index];
       try {
-        const record = analyzer.analyzePayload(item.data || item, {
+        const record = compactRecord(analyzer.analyzePayload(item.data || item, {
           sourceUrl: item.sourceUrl || "",
           title: item.title || (item.taskId ? `BigCoach ${String(item.taskId).slice(0, 8)}` : "BigCoach解析"),
           importedAt: item.submittedAt || bundle.exportedAt,
           playerName: item.playerName || bundle.targetPlayer,
           platform: item.platform || "",
           table: item.table || ""
-        });
+        }));
         const exists = [...records, ...added].some((saved) =>
           (record.gameId && saved.gameId === record.gameId) || saved.id === record.id
         );
@@ -151,11 +230,16 @@
       } catch {
         failed += 1;
       }
+      if (item && typeof item === "object") item.data = null;
+      if (index % 4 === 3) {
+        setStatus(`差分JSONを解析中… ${index + 1}/${incoming.length}対局`, "loading");
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
     }
     records.unshift(...added);
     selectedId = null;
     scope = "all";
-    saveRecords();
+    await saveRecords();
     render();
     const remoteFailures = Number(bundle?.failures?.length || 0);
     setStatus(`一括取込: ${added.length}対局を追加、${duplicates}件の重複を除外、${failed + remoteFailures}件を取得・解析できませんでした。`, added.length ? "success" : "error");
@@ -196,7 +280,7 @@
     try {
       const raw = elements.url.value.trim();
       const data = await fetchFromReviewUrl(raw);
-      addPayload(data, { sourceUrl: raw, title: reviewTitle(raw) });
+      await addPayload(data, { sourceUrl: raw, title: reviewTitle(raw) });
     } catch (error) {
       const reason = error instanceof TypeError
         ? "BigCoachへの直接接続がブラウザに拒否されました。"
@@ -218,21 +302,24 @@
   }
 
   async function handleText(text, meta = {}) {
-    const trimmed = text.trim();
-    if (!trimmed) throw new Error("内容が空です。");
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      const parsed = JSON.parse(trimmed);
-      if (parsed?.kind === "bigcoach-luck-bundle") addBundle(parsed);
-      else if (Array.isArray(parsed?.records)) addProcessedRecords(parsed.records);
-      else addPayload(parsed, meta);
+    const firstContent = text.search(/\S/);
+    if (firstContent < 0) throw new Error("内容が空です。");
+    let source = firstContent === 0 ? text : text.slice(firstContent);
+    if (source.startsWith("{") || source.startsWith("[")) {
+      const parsed = JSON.parse(source);
+      source = "";
+      text = "";
+      if (parsed?.kind === "bigcoach-luck-bundle") await addBundle(parsed);
+      else if (Array.isArray(parsed?.records)) await addProcessedRecords(parsed.records);
+      else await addPayload(parsed, meta);
       return;
     }
-    const extracted = analyzer.extractEmbeddedJson(trimmed);
+    const extracted = analyzer.extractEmbeddedJson(source);
     if (!extracted) throw new Error("HTML内に解析JSONを見つけられませんでした。ブックマークレットでJSONをコピーしてください。");
     if (extracted.dataUrl) {
       throw new Error("HTMLにはJSONのURLだけがありました。CORS制限を避けるため、ブックマークレットを実行してください。");
     }
-    addPayload(extracted, meta);
+    await addPayload(extracted, meta);
   }
 
   function formatNumber(value, digits = 1) {
@@ -245,8 +332,10 @@
     return `${numeric >= 0 ? "+" : "−"}${Math.abs(numeric).toFixed(digits)}`;
   }
 
-  function addProcessedRecords(incoming) {
-    const valid = incoming.filter((record) => record?.schemaVersion === analyzer.VERSION && Array.isArray(record.rounds));
+  async function addProcessedRecords(incoming) {
+    const valid = incoming
+      .filter((record) => record?.schemaVersion === analyzer.VERSION && Array.isArray(record.rounds))
+      .map(compactRecord);
     if (!valid.length) throw new Error("この履歴は旧計算方式です。元のBigCoach JSONから再取り込みしてください。");
     let added = 0;
     for (const record of valid) {
@@ -256,7 +345,7 @@
         added += 1;
       }
     }
-    saveRecords();
+    await saveRecords();
     scope = "all";
     selectedId = null;
     render();
@@ -462,12 +551,12 @@
         render();
         document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth" });
       });
-      fragment.querySelector(".delete-button").addEventListener("click", () => {
+      fragment.querySelector(".delete-button").addEventListener("click", async () => {
         if (!window.confirm(`「${record.title}」を端末から削除しますか？`)) return;
         records = records.filter((item) => item.id !== record.id);
         if (selectedId === record.id) selectedId = null;
         if (!selectedId) scope = "all";
-        saveRecords();
+        await saveRecords();
         render();
       });
       elements.history.append(item);
@@ -558,6 +647,7 @@
     const file = elements.file.files?.[0];
     if (!file) return;
     try {
+      setStatus(`${file.name}（${(file.size / 1024 / 1024).toFixed(1)}MB）を読み込み中…`, "loading");
       await handleText(await file.text(), { title: file.name.replace(/\.(json|html?)$/i, "") });
     } catch (error) {
       setStatus(error.message, "error");
@@ -565,13 +655,32 @@
       elements.file.value = "";
     }
   });
-  elements.demo.addEventListener("click", () => addPayload(DEMO_DATA, { title: "デモ牌譜" }));
+  elements.demo.addEventListener("click", async () => {
+    try {
+      await addPayload(DEMO_DATA, { title: "デモ牌譜" });
+    } catch (error) {
+      setStatus(error.message, "error");
+    }
+  });
   elements.export.addEventListener("click", downloadJson);
   elements.scopeButtons.forEach((button) => button.addEventListener("click", () => {
     scope = button.dataset.scope;
     render();
   }));
 
-  buildBookmarklet();
-  render();
+  async function initialize() {
+    buildBookmarklet();
+    setStatus("保存履歴を読み込み中…", "loading");
+    try {
+      records = await loadRecords();
+      navigator.storage?.persist?.().catch(() => false);
+      setStatus(records.length ? `${records.length}対局の保存履歴を読み込みました。` : "", records.length ? "success" : "");
+      render();
+    } catch (error) {
+      setStatus(`保存領域を準備できませんでした: ${error.message}`, "error");
+      render();
+    }
+  }
+
+  initialize();
 })();
