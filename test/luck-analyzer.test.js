@@ -52,7 +52,7 @@ test("Cauchy結合は有効なp値だけをまとめる", () => {
   assert.ok(combined > 0 && combined < 0.2);
 });
 
-test("BigCoach実例から27指標と理論ツモを抽出できる", () => {
+test("BigCoach実例から28指標と理論ツモを抽出できる", () => {
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data.json"), "utf8"));
   const record = analyzePayload(fixture, { title: "fixture", taskId: "fixture-task" });
   const summary = summarize([record]);
@@ -83,8 +83,11 @@ test("BigCoach実例から27指標と理論ツモを抽出できる", () => {
   assert.ok(Array.isArray(summary.fairness.diagnostics));
   assert.deepEqual(summary.fairness.groups.map((item) => item.key), ["theory", "bigcoach", "all"]);
   assert.equal(summary.fairness.groups.find((item) => item.key === "all").pValue, null);
-  assert.ok(record.rounds.some((round) => round.outcomeLuck.length > 0));
-  assert.equal(summary.overall.totalComponents, 27);
+  assert.ok(record.rounds.some((round) => round.otherWinAvoidLuck.length > 0));
+  assert.ok(record.rounds.some((round) => round.wasteDraw.length > 0));
+  assert.ok(record.rounds.every((round) => Array.isArray(round.genbutsu1)));
+  assert.ok(record.rounds.every((round) => Array.isArray(round.fuuroGenbutsu)));
+  assert.equal(summary.overall.totalComponents, 28);
   assert.equal(summary.overall.u, 0.5);
   assert.equal(summary.overall.distributionN, 1);
 });
@@ -119,9 +122,11 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /id="record-select"/);
   assert.match(html, /id="ura-self-percentile"/);
   assert.match(html, /id="opponent-tenpai-win-percentile"/);
-  assert.match(html, /総合運と27指標/);
+  assert.match(html, /実際の着順、総合運、28指標/);
   assert.match(html, /2シャンテン時有効牌ツモ率/);
-  assert.match(html, /確率決着収支/);
+  assert.match(html, /被副露・聴牌時現物掴み率/);
+  assert.match(html, /無駄ツモ率/);
+  assert.doesNotMatch(html, /確率決着収支|局結果総合上振れ|ツモ和了上振れ|ロン和了上振れ|放銃回避上振れ/);
   assert.match(html, /重みが大きい上位5指標/);
   assert.match(html, /U\[0,1\]/);
   assert.doesNotMatch(app, /const target='はうらC'/);
@@ -130,11 +135,12 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(app, /validationCorrelation/);
   assert.match(app, /initializeTrendSelection\(model\.weights\)/);
   assert.match(app, /\.slice\(0, 5\)/);
+  assert.match(app, /actualRankPlot/);
   assert.match(app, /empiricalPercentile\(rawOverallScores\[roundIndex\], rawOverallScores\)/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });
 
-test("局開始時5結果確率を排他的な実現結果残差へ変換する", () => {
+test("局開始時5結果確率から技術の入りにくい他家決着だけを残す", () => {
   const record = analyzePayload({
     player_id: 0,
     review: { kyokus: [{
@@ -144,20 +150,19 @@ test("局開始時5結果確率を排他的な実現結果残差へ変換する"
     }] }
   });
   const round = record.rounds[0];
-  assert.deepEqual(round.tsumoLuck[0], { p: 0.1, y: 0 });
-  assert.deepEqual(round.ronLuck[0], { p: 0.2, y: 1 });
-  assert.deepEqual(round.dealInAvoidLuck[0], { p: 0.3, y: 0 });
   assert.deepEqual(round.otherWinAvoidLuck[0], { p: 0.25, y: 0 });
-  assert.ok(Math.abs(round.outcomeLuck[0].p) < 1e-12);
-  assert.equal(round.outcomeLuck[0].y, 1);
-  assert.ok(Math.abs(round.outcomeLuck[0].v - 0.6) < 1e-12);
+  assert.equal(round.outcomeLuck, undefined);
+  assert.equal(round.tsumoLuck, undefined);
+  assert.equal(round.ronLuck, undefined);
+  assert.equal(round.dealInAvoidLuck, undefined);
+  assert.equal(round.chancePoints, undefined);
 });
 
 test("最終着順と最終点棒は運指標の入力に混ぜない", () => {
   const rounds = [{
-    deal: { value: 0.3 }, rankDeal: { value: 0.1 }, chancePoints: 2,
-    outcomeLuck: [{ p: 0.2, y: 1 }], tsumoLuck: [{ p: 0.1, y: 1 }],
-    ronLuck: [{ p: 0.1, y: 0 }], dealInAvoidLuck: [{ p: 0.2, y: 0 }], otherWinAvoidLuck: [{ p: 0.3, y: 0 }]
+    deal: { value: 0.3 }, rankDeal: { value: 0.1 },
+    wasteDraw: [{ p: 0.2, y: 1 }], genbutsu1: [{ p: 0.1, y: 1 }],
+    fuuroGenbutsu: [{ p: 0.1, y: 0 }], otherWinAvoidLuck: [{ p: 0.3, y: 0 }]
   }];
   const first = { id: "a", actualRank: 1, finalScore: 50000, rounds };
   const second = { id: "b", actualRank: 4, finalScore: -1000, rounds };
