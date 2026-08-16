@@ -632,17 +632,11 @@
     return total > 0 ? entries.reduce((sum, [key, weight]) => sum + (Number.isFinite(scores?.[key]) ? scores[key] : 50) * Number(weight), 0) / total : null;
   }
 
-  function initializeTrendSelection(weights) {
+  function initializeTrendSelection() {
     if (trendSelectionInitialized) return;
-    const topFive = Object.entries(weights || {})
-      .filter(([key, weight]) => key in METRIC_LABELS && Number.isFinite(Number(weight)))
-      .sort((left, right) => Number(right[1]) - Number(left[1]))
-      .slice(0, 5)
-      .map(([key]) => key);
     trendVisible.clear();
     trendVisible.add("actualRankPlot");
     trendVisible.add("overall");
-    topFive.forEach((key) => trendVisible.add(key));
     trendSelectionInitialized = true;
   }
 
@@ -657,7 +651,7 @@
       .sort((left, right) => left.time - right.time || right.index - left.index)
       .map((item) => item.record);
     const model = analyzer.fitOutcomeWeights(chronological);
-    initializeTrendSelection(model.weights);
+    initializeTrendSelection();
     const recordScores = analyzer.recordMetricScores(chronological);
     const rawOverallScores = recordScores.map((row) => weightedRecordScore(row.scores, model.weights));
     const allPoints = recordScores.map((row, gameIndex) => ({
@@ -877,17 +871,6 @@
     elements.historyPlayer.value = localStorage.getItem(PLAYER_NAME_KEY) || "";
     elements.historyPlayer.addEventListener("input", updateHistoryBookmarklet);
     updateHistoryBookmarklet();
-    elements.historyBookmarklet.addEventListener("dragstart", (event) => {
-      if (!historyBookmarkletUrl) {
-        event.preventDefault();
-        return;
-      }
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = "copyLink";
-        event.dataTransfer.setData("text/uri-list", historyBookmarkletUrl);
-        event.dataTransfer.setData("text/plain", historyBookmarkletUrl);
-      }
-    });
     const copyHistoryBookmarklet = async () => {
       if (!historyBookmarkletUrl) {
         setStatus("先にBigCoachのプレイヤー名を入力してください。", "error");
@@ -910,14 +893,13 @@
       setStatus("登録コードをコピーしました。ブックマークバーの空白を右クリック →「ページを追加」→ URL欄へ貼り付けて保存してください。", "success");
       return true;
     };
-    elements.historyBookmarklet.addEventListener("click", async (event) => {
+    elements.historyBookmarklet.addEventListener("click", (event) => {
       if (!location.protocol.startsWith("http")) return;
       event.preventDefault();
-      try {
-        await copyHistoryBookmarklet();
-      } catch (error) {
-        setStatus(error.message, "error");
-      }
+      const target = elements.historyPlayer.value.trim();
+      setStatus(target
+        ? `「${target}の未取得実戦を保存」をブックマークバーへドラッグしてください。コードのコピーは下の「ドラッグできない場合はこちら」から行えます。`
+        : "先にBigCoachのプレイヤー名を入力してください。", "loading");
     });
     elements.historyBookmarkletCopy.addEventListener("click", async () => {
       try {
