@@ -146,6 +146,7 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   const app = fs.readFileSync(path.join(__dirname, "..", "docs", "app.js"), "utf8");
   assert.match(html, /id="history-player"/);
   assert.match(html, /id="history-bookmarklet-copy"/);
+  assert.match(html, /id="history-refresh-note"/);
   assert.match(html, /ドラッグできない場合はこちら/);
   assert.match(html, /ページを追加/);
   assert.match(html, /ふだんは、こちらだけ使います/);
@@ -171,6 +172,9 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.doesNotMatch(html, /id="history-bookmarklet"[^>]*draggable=/);
   assert.doesNotMatch(app, /historyBookmarklet\.addEventListener\("dragstart"/);
   assert.match(app, /navigator\.clipboard\.writeText\(historyBookmarkletUrl\)/);
+  assert.match(app, /refresh=new Set\(__REFRESH__\)/);
+  assert.match(app, /done\[id\]&&!refresh\.has\(id\)/);
+  assert.match(app, /record\.calculationVersion !== analyzer\.CALCULATION_VERSION/);
   assert.match(app, /validationCorrelation/);
   assert.match(app, /initializeTrendSelection\(\)/);
   assert.match(app, /recordMetricScores\(chronological\)/);
