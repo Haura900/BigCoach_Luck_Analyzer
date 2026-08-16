@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 4;
+  const CACHE_VERSION = 5;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -15,7 +15,11 @@
   let selectedId = null;
   let scope = "all";
   let trendLimit = "50";
-  const trendVisible = new Set(["overall", "deal", "rankDeal", "defense", "dora", "effective", "riichiWin", "riichiDealIn", "genbutsu"]);
+  const trendVisible = new Set([
+    "overall", "deal", "rankDeal", "defense", "dora", "effective", "riichiWin", "riichiDealIn", "genbutsu",
+    "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
+    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent"
+  ]);
   const METRIC_LABELS = {
     deal: "配牌時和了率",
     rankDeal: "配牌時平着変動",
@@ -24,7 +28,18 @@
     effective: "有効牌ツモ率",
     riichiWin: "リーチ時自明和了率",
     riichiDealIn: "リーチ後危険牌回避度",
-    genbutsu: "被リーチ時現物掴み率"
+    genbutsu: "被リーチ時現物掴み率",
+    riichiHitOpponent: "リーチ時他家掴ませ率",
+    uraSelf: "自分裏ドラ運",
+    opponentDora: "他家ドラツモ回避",
+    opponentRiichiWin: "他家リーチ和了回避",
+    uraOpponent: "他家裏ドラ回避",
+    selfTenpaiWin: "テンパイ後和了牌ツモ",
+    opponentTenpaiWin: "他家和了牌ツモ回避",
+    selfTenpaiEntry: "テンパイ到達ツモ",
+    opponentTenpaiEntry: "他家テンパイ到達回避",
+    initialDoraSelf: "自分配牌ドラ",
+    initialDoraOpponent: "他家配牌ドラ回避"
   };
 
   const elements = {
@@ -114,7 +129,11 @@
   }
 
   function compactEvents(events) {
-    return (events || []).map((event) => ({ p: Number(event.p), y: Number(event.y) }));
+    return (events || []).map((event) => {
+      const compact = { p: Number(event.p), y: Number(event.y) };
+      if (Number.isFinite(Number(event.v))) compact.v = Number(event.v);
+      return compact;
+    });
   }
 
   function compactRecord(record) {
@@ -144,6 +163,17 @@
         genbutsu: compactEvents(round.genbutsu),
         riichiWin: compactEvents(round.riichiWin),
         riichiDealIn: compactEvents(round.riichiDealIn),
+        riichiHitOpponent: compactEvents(round.riichiHitOpponent),
+        uraSelf: compactEvents(round.uraSelf),
+        opponentDora: compactEvents(round.opponentDora),
+        opponentRiichiWin: compactEvents(round.opponentRiichiWin),
+        uraOpponent: compactEvents(round.uraOpponent),
+        selfTenpaiWin: compactEvents(round.selfTenpaiWin),
+        opponentTenpaiWin: compactEvents(round.opponentTenpaiWin),
+        selfTenpaiEntry: compactEvents(round.selfTenpaiEntry),
+        opponentTenpaiEntry: compactEvents(round.opponentTenpaiEntry),
+        initialDoraSelf: compactEvents(round.initialDoraSelf),
+        initialDoraOpponent: compactEvents(round.initialDoraOpponent),
         theorySupported: Boolean(round.theorySupported)
       }))
     };
@@ -493,7 +523,7 @@
       .map(([key, weight]) => `${METRIC_LABELS[key]} ${formatNumber(weight * 100, 1)}%`)
       .join(" / ");
     document.querySelector("#overall-model").textContent = overall.fittedWeights
-      ? `目的変数=5−着順、対象なしはU=0.5で補完する標準化非負回帰 · 学習内相関 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局）· 重み: ${weightText}`
+      ? `目的変数=5−着順、対象なしはU=0.5で補完する非負リッジ回帰 · 5分割検証 r=${formatNumber(overall.validationCorrelation, 3)} / 学習内 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局、L2=${formatNumber(overall.ridgePenalty, 0)}）· 重み: ${weightText}`
       : `実着順を保存した対局が不足しているため均等重みです（${overall.correlationN}/20対局）。既存履歴は元の差分JSONを再取り込みすると着順が補完されます。`;
     const overallComponents = document.querySelector("#overall-components");
     overallComponents.replaceChildren(
@@ -508,6 +538,17 @@
     setTheoryMetric("riichi-win", summary.riichiWin, "回");
     setTheoryMetric("riichi-danger", summary.riichiDealIn, "回");
     setTheoryMetric("genbutsu", summary.genbutsu, "回");
+    setTheoryMetric("riichi-hit-opponent", summary.riichiHitOpponent, "回");
+    setTheoryMetric("ura-self", summary.uraSelf, "枚");
+    setTheoryMetric("opponent-dora", summary.opponentDora, "回");
+    setTheoryMetric("opponent-riichi-win", summary.opponentRiichiWin, "回");
+    setTheoryMetric("ura-opponent", summary.uraOpponent, "枚");
+    setTheoryMetric("self-tenpai-win", summary.selfTenpaiWin, "回");
+    setTheoryMetric("opponent-tenpai-win", summary.opponentTenpaiWin, "回");
+    setTheoryMetric("self-tenpai-entry", summary.selfTenpaiEntry, "回");
+    setTheoryMetric("opponent-tenpai-entry", summary.opponentTenpaiEntry, "回");
+    setTheoryMetric("initial-dora-self", summary.initialDoraSelf, "枚");
+    setTheoryMetric("initial-dora-opponent", summary.initialDoraOpponent, "枚");
     renderFairness(summary.fairness);
   }
 
@@ -591,7 +632,18 @@
       { key: "effective", label: METRIC_LABELS.effective, color: "#2d9aa0", width: 1.8 },
       { key: "riichiWin", label: METRIC_LABELS.riichiWin, color: "#7656a8", width: 1.8 },
       { key: "riichiDealIn", label: METRIC_LABELS.riichiDealIn, color: "#b04f91", width: 1.8 },
-      { key: "genbutsu", label: METRIC_LABELS.genbutsu, color: "#70843b", width: 1.8 }
+      { key: "genbutsu", label: METRIC_LABELS.genbutsu, color: "#70843b", width: 1.8 },
+      { key: "riichiHitOpponent", label: METRIC_LABELS.riichiHitOpponent, color: "#8e5a9b", width: 1.8 },
+      { key: "uraSelf", label: METRIC_LABELS.uraSelf, color: "#d14f73", width: 1.8 },
+      { key: "selfTenpaiWin", label: METRIC_LABELS.selfTenpaiWin, color: "#6246a8", width: 1.8 },
+      { key: "selfTenpaiEntry", label: METRIC_LABELS.selfTenpaiEntry, color: "#3f63ad", width: 1.8 },
+      { key: "initialDoraSelf", label: METRIC_LABELS.initialDoraSelf, color: "#1f8aa6", width: 1.8 },
+      { key: "opponentDora", label: METRIC_LABELS.opponentDora, color: "#9b7b27", width: 1.8 },
+      { key: "opponentRiichiWin", label: METRIC_LABELS.opponentRiichiWin, color: "#9a483f", width: 1.8 },
+      { key: "uraOpponent", label: METRIC_LABELS.uraOpponent, color: "#be6b35", width: 1.8 },
+      { key: "opponentTenpaiWin", label: METRIC_LABELS.opponentTenpaiWin, color: "#7c6530", width: 1.8 },
+      { key: "opponentTenpaiEntry", label: METRIC_LABELS.opponentTenpaiEntry, color: "#58733a", width: 1.8 },
+      { key: "initialDoraOpponent", label: METRIC_LABELS.initialDoraOpponent, color: "#3d7764", width: 1.8 }
     ];
     for (const item of series) {
       const chip = document.createElement("label");
