@@ -11,16 +11,17 @@
   if (!core) throw new Error("MahjongLuckCore is required");
 
   const VERSION = 2;
-  const CALCULATION_VERSION = 5;
+  const CALCULATION_VERSION = 6;
   const EXPERIENCE_MIN_POOL = 30;
   const DEFENSE_MIN_POOL = 30;
   const THEORY_MIN_N = 20;
   const RIICHI_MIN_N = 10;
   const SEAT_NAMES = ["東家", "南家", "西家", "北家"];
   const METRIC_KEYS = [
-    "deal", "rankDeal", "defense", "dora", "effective", "genbutsu", "riichiWin", "riichiDealIn",
+    "deal", "rankDeal", "defense", "dora", "effective", "effective2", "effective1", "genbutsu", "riichiWin", "riichiDealIn",
     "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
-    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent"
+    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent",
+    "outcomeLuck", "tsumoLuck", "ronLuck", "dealInAvoidLuck", "otherWinAvoidLuck", "chancePoints"
   ];
 
   function clampProbability(value) {
@@ -96,6 +97,33 @@
     return (endStatus || []).some((item) =>
       item?.type === "hora" && Number(item.target) === hero && Number(item.actor) !== hero
     );
+  }
+
+  function outcomeProbabilities(entry) {
+    if (!Array.isArray(entry?.sl_outcome) || entry.sl_outcome.length < 5) return null;
+    const probabilities = entry.sl_outcome.slice(0, 5).map(clampProbability);
+    if (probabilities.some((value) => value == null)) return null;
+    const total = probabilities.reduce((sum, value) => sum + value, 0);
+    return total > 0 ? probabilities : null;
+  }
+
+  function outcomeExposures(entry, endStatus, hero) {
+    const p = outcomeProbabilities(entry);
+    if (!p) return null;
+    const wins = (endStatus || []).filter((item) => item?.type === "hora");
+    const selfTsumo = wins.some((item) => Number(item.actor) === hero && Number(item.target) === hero);
+    const selfRon = wins.some((item) => Number(item.actor) === hero && Number(item.target) !== hero);
+    const dealtIn = wins.some((item) => Number(item.target) === hero && Number(item.actor) !== hero);
+    const category = selfTsumo ? "tsumo" : selfRon ? "ron" : dealtIn ? "dealIn" : wins.length ? "other" : "draw";
+    const expectedUtility = p[0] + p[1] - p[2];
+    const variance = p[0] + p[1] + p[2] - expectedUtility * expectedUtility;
+    return {
+      outcomeLuck: [{ p: expectedUtility, y: (["tsumo", "ron"].includes(category) ? 1 : 0) - (category === "dealIn" ? 1 : 0), v: Math.max(0, variance) }],
+      tsumoLuck: [{ p: p[0], y: category === "tsumo" ? 1 : 0 }],
+      ronLuck: [{ p: p[1], y: category === "ron" ? 1 : 0 }],
+      dealInAvoidLuck: [{ p: p[2], y: category === "dealIn" ? 1 : 0 }],
+      otherWinAvoidLuck: [{ p: p[3], y: category === "other" ? 1 : 0 }]
+    };
   }
 
   function roundLabel(kyoku, index) {
@@ -214,9 +242,9 @@
     const start = events?.[0];
     if (start?.type !== "start_kyoku" || !Array.isArray(start.tehais)) {
       return {
-        supported: false, dora: [], effective: [], genbutsu: [], riichiWin: [], riichiDealIn: [],
+        supported: false, dora: [], effective: [], effective2: [], effective1: [], genbutsu: [], riichiWin: [], riichiDealIn: [],
         riichiHitOpponent: [], uraSelf: [], opponentDora: [], opponentRiichiWin: [], uraOpponent: [],
-        selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], seat: null
+        selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], chancePoints: 0, seat: null
       };
     }
     const hands = start.tehais.map((hand) => Array.isArray(hand) ? [...hand] : []);
@@ -230,13 +258,15 @@
     const pending = Array(playerCount).fill(null);
     const meldTiles = Array.from({ length: playerCount }, () => []);
     let lastDiscardTile = null;
+    let lastDiscardActor = null;
+    let chanceSettlementRecorded = false;
     const seatIndex = ((hero - Number(start.oya || 0)) % playerCount + playerCount) % playerCount;
     const seat = SEAT_NAMES[seatIndex] || `席${seatIndex + 1}`;
     const baseMeta = { gameId: context.gameId, roundKey: context.roundKey, seat };
     const result = {
-      supported: true, dora: [], effective: [], genbutsu: [], riichiWin: [], riichiDealIn: [],
+      supported: true, dora: [], effective: [], effective2: [], effective1: [], genbutsu: [], riichiWin: [], riichiDealIn: [],
       riichiHitOpponent: [], uraSelf: [], opponentDora: [], opponentRiichiWin: [], uraOpponent: [],
-      selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], seat
+      selfTenpaiWin: [], opponentTenpaiWin: [], selfTenpaiEntry: [], opponentTenpaiEntry: [], initialDoraSelf: [], initialDoraOpponent: [], chancePoints: 0, seat
     };
 
     function addOutside(tile) {
@@ -345,9 +375,12 @@
           const doraDraw = doraDrawExposure(state, actualId, event.pai);
           const improving = core.improvingTiles(hands[hero], openMelds[hero]);
           if (actor === hero) {
-            result.dora.push(exposure(doraDraw.p, doraDraw.y));
-            result.effective.push(exposure(countIds(state.remaining, improving) / state.total, improving.includes(actualId) ? 1 : 0));
             const heroShanten = core.shanten(hands[hero], openMelds[hero]);
+            const effectiveExposure = exposure(countIds(state.remaining, improving) / state.total, improving.includes(actualId) ? 1 : 0);
+            result.dora.push(exposure(doraDraw.p, doraDraw.y));
+            result.effective.push(effectiveExposure);
+            if (heroShanten === 2) result.effective2.push(effectiveExposure);
+            if (heroShanten === 1) result.effective1.push(effectiveExposure);
             if (heroShanten === 1) result.selfTenpaiEntry.push(exposure(countIds(state.remaining, improving) / state.total, improving.includes(actualId) ? 1 : 0));
             if (heroShanten === 0) {
               const waits = core.winningTiles(hands[hero], openMelds[hero]);
@@ -416,6 +449,7 @@
         addOutside(event.pai);
         hands[actor].push(event.pai);
         lastDiscardTile = null;
+        lastDiscardActor = null;
         if (!pending[actor]) pending[actor] = { tile: event.pai };
         else pending[actor].tile = event.pai;
         continue;
@@ -430,6 +464,7 @@
         const id = core.tile34(event.pai);
         if (id >= 0) discards[actor].add(id);
         lastDiscardTile = event.pai;
+        lastDiscardActor = actor;
         pending[actor] = null;
         continue;
       }
@@ -473,6 +508,13 @@
       if (event?.type === "hora") {
         const ura = uraExposure(event);
         if (ura) result[Number(event.actor) === hero ? "uraSelf" : "uraOpponent"].push(ura);
+        const winner = Number(event.actor);
+        const target = Number(event.target);
+        const chanceResolved = winner === target || (lastDiscardActor === target && acceptedRiichi.has(target));
+        if (!chanceSettlementRecorded && chanceResolved && Array.isArray(event.deltas) && Number.isFinite(Number(event.deltas[hero]))) {
+          result.chancePoints += Number(event.deltas[hero]) / 1000;
+          chanceSettlementRecorded = true;
+        }
       }
 
       if (["hora", "ryukyoku", "end_kyoku"].includes(event?.type)) {
@@ -509,6 +551,7 @@
     const rounds = kyokus.map((kyoku, index) => {
       const entries = Array.isArray(kyoku.entries) ? kyoku.entries : [];
       const firstEntry = entries.find((entry) => winProbability(entry) != null) || null;
+      const outcomeEntry = entries.find((entry) => outcomeProbabilities(entry) != null) || null;
       const dealP = firstEntry ? winProbability(firstEntry) : null;
       const placement = firstEntry ? placementProbabilities(firstEntry) : null;
       const info = firstEntry ? parseGameInfo(firstEntry) : {};
@@ -518,6 +561,9 @@
         gameId,
         roundKey: `${gameId}:${index}`
       });
+      const outcomes = outcomeExposures(outcomeEntry, kyoku.end_status || [], hero) || {
+        outcomeLuck: [], tsumoLuck: [], ronLuck: [], dealInAvoidLuck: [], otherWinAvoidLuck: []
+      };
       return {
         label: roundLabel(kyoku, index),
         index,
@@ -531,6 +577,8 @@
         defense: analyzeDefense(kyoku, hero),
         dora: theory.dora,
         effective: theory.effective,
+        effective2: theory.effective2,
+        effective1: theory.effective1,
         genbutsu: theory.genbutsu,
         riichiWin: theory.riichiWin,
         riichiDealIn: theory.riichiDealIn,
@@ -545,6 +593,8 @@
         opponentTenpaiEntry: theory.opponentTenpaiEntry,
         initialDoraSelf: theory.initialDoraSelf,
         initialDoraOpponent: theory.initialDoraOpponent,
+        ...outcomes,
+        chancePoints: theory.chancePoints,
         theorySupported: theory.supported
       };
     });
@@ -666,55 +716,69 @@
     return leftVariance > 0 && rightVariance > 0 ? numerator / Math.sqrt(leftVariance * rightVariance) : null;
   }
 
-  function scoreUnits(units) {
-    const raw = units.map((unit) => {
-      const rounds = unit.rounds || [];
-      return {
-        deal: mean(rounds.map((round) => round.deal?.value)),
-        rankDeal: mean(rounds.map((round) => round.rankDeal?.value)),
-        defense: mean(rounds.map(defenseRoundValue)),
-        dora: martingale(rounds.flatMap((round) => round.dora || []), 1).percentile,
-        effective: martingale(rounds.flatMap((round) => round.effective || []), 1).percentile,
-        genbutsu: martingale(rounds.flatMap((round) => round.genbutsu || []), 1).percentile,
-        riichiWin: martingale(rounds.flatMap((round) => round.riichiWin || []), 1).percentile,
-        riichiDealIn: martingale(rounds.flatMap((round) => round.riichiDealIn || []), -1).percentile,
-        riichiHitOpponent: martingale(rounds.flatMap((round) => round.riichiHitOpponent || []), 1).percentile,
-        uraSelf: martingale(rounds.flatMap((round) => round.uraSelf || []), 1).percentile,
-        opponentDora: martingale(rounds.flatMap((round) => round.opponentDora || []), -1).percentile,
-        opponentRiichiWin: martingale(rounds.flatMap((round) => round.opponentRiichiWin || []), -1).percentile,
-        uraOpponent: martingale(rounds.flatMap((round) => round.uraOpponent || []), -1).percentile,
-        selfTenpaiWin: martingale(rounds.flatMap((round) => round.selfTenpaiWin || []), 1).percentile,
-        opponentTenpaiWin: martingale(rounds.flatMap((round) => round.opponentTenpaiWin || []), -1).percentile,
-        selfTenpaiEntry: martingale(rounds.flatMap((round) => round.selfTenpaiEntry || []), 1).percentile,
-        opponentTenpaiEntry: martingale(rounds.flatMap((round) => round.opponentTenpaiEntry || []), -1).percentile,
-        initialDoraSelf: martingale(rounds.flatMap((round) => round.initialDoraSelf || []), 1).percentile,
-        initialDoraOpponent: martingale(rounds.flatMap((round) => round.initialDoraOpponent || []), -1).percentile
-      };
-    });
-    const pools = Object.fromEntries(["deal", "rankDeal", "defense"].map((key) => [key, raw.map((row) => row[key]).filter(Number.isFinite)]));
+  function rawUnitScores(rounds) {
+    const validRounds = rounds || [];
+    return {
+      deal: mean(validRounds.map((round) => round.deal?.value)),
+      rankDeal: mean(validRounds.map((round) => round.rankDeal?.value)),
+      defense: mean(validRounds.map(defenseRoundValue)),
+      dora: martingale(validRounds.flatMap((round) => round.dora || []), 1).percentile,
+      effective: martingale(validRounds.flatMap((round) => round.effective || []), 1).percentile,
+      effective2: martingale(validRounds.flatMap((round) => round.effective2 || []), 1).percentile,
+      effective1: martingale(validRounds.flatMap((round) => round.effective1 || []), 1).percentile,
+      genbutsu: martingale(validRounds.flatMap((round) => round.genbutsu || []), 1).percentile,
+      riichiWin: martingale(validRounds.flatMap((round) => round.riichiWin || []), 1).percentile,
+      riichiDealIn: martingale(validRounds.flatMap((round) => round.riichiDealIn || []), -1).percentile,
+      riichiHitOpponent: martingale(validRounds.flatMap((round) => round.riichiHitOpponent || []), 1).percentile,
+      uraSelf: martingale(validRounds.flatMap((round) => round.uraSelf || []), 1).percentile,
+      opponentDora: martingale(validRounds.flatMap((round) => round.opponentDora || []), -1).percentile,
+      opponentRiichiWin: martingale(validRounds.flatMap((round) => round.opponentRiichiWin || []), -1).percentile,
+      uraOpponent: martingale(validRounds.flatMap((round) => round.uraOpponent || []), -1).percentile,
+      selfTenpaiWin: martingale(validRounds.flatMap((round) => round.selfTenpaiWin || []), 1).percentile,
+      opponentTenpaiWin: martingale(validRounds.flatMap((round) => round.opponentTenpaiWin || []), -1).percentile,
+      selfTenpaiEntry: martingale(validRounds.flatMap((round) => round.selfTenpaiEntry || []), 1).percentile,
+      opponentTenpaiEntry: martingale(validRounds.flatMap((round) => round.opponentTenpaiEntry || []), -1).percentile,
+      initialDoraSelf: martingale(validRounds.flatMap((round) => round.initialDoraSelf || []), 1).percentile,
+      initialDoraOpponent: martingale(validRounds.flatMap((round) => round.initialDoraOpponent || []), -1).percentile,
+      outcomeLuck: martingale(validRounds.flatMap((round) => round.outcomeLuck || []), 1).luckZ ?? 0,
+      tsumoLuck: martingale(validRounds.flatMap((round) => round.tsumoLuck || []), 1).luckZ ?? 0,
+      ronLuck: martingale(validRounds.flatMap((round) => round.ronLuck || []), 1).luckZ ?? 0,
+      dealInAvoidLuck: martingale(validRounds.flatMap((round) => round.dealInAvoidLuck || []), -1).luckZ ?? 0,
+      otherWinAvoidLuck: martingale(validRounds.flatMap((round) => round.otherWinAvoidLuck || []), -1).luckZ ?? 0,
+      chancePoints: validRounds.length ? validRounds.reduce((sum, round) => sum + (Number.isFinite(Number(round.chancePoints)) ? Number(round.chancePoints) : 0), 0) : null
+    };
+  }
+
+  function scoreUnits(units, referenceUnits = units) {
+    const raw = units.map((unit) => rawUnitScores(unit.rounds || []));
+    const referenceRaw = referenceUnits === units ? raw : referenceUnits.map((unit) => rawUnitScores(unit.rounds || []));
+    const empiricalKeys = ["deal", "rankDeal", "defense", "outcomeLuck", "tsumoLuck", "ronLuck", "dealInAvoidLuck", "otherWinAvoidLuck", "chancePoints"];
+    const pools = Object.fromEntries(empiricalKeys.map((key) => [key, referenceRaw.map((row) => row[key]).filter(Number.isFinite)]));
     return units.map((unit, index) => {
       const { rounds, ...meta } = unit;
+      const scores = { ...raw[index] };
+      for (const key of empiricalKeys) scores[key] = empiricalPercentile(raw[index][key], pools[key]);
       return {
         ...meta,
-        scores: {
-        ...raw[index],
-        deal: empiricalPercentile(raw[index].deal, pools.deal),
-        rankDeal: empiricalPercentile(raw[index].rankDeal, pools.rankDeal),
-        defense: empiricalPercentile(raw[index].defense, pools.defense)
-        }
+        scores
       };
     });
   }
 
-  function recordMetricScores(records) {
-    const units = (Array.isArray(records) ? records : []).map((record) => ({
+  function recordUnits(records) {
+    return (Array.isArray(records) ? records : []).map((record) => ({
       id: record.id,
       importedAt: record.importedAt,
       title: record.title,
       actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) ? Number(record.actualRank) : null,
       rounds: record.rounds || []
     }));
-    return scoreUnits(units);
+  }
+
+  function recordMetricScores(records, referenceRecords = records) {
+    const units = recordUnits(records);
+    const referenceUnits = referenceRecords === records ? units : recordUnits(referenceRecords);
+    return scoreUnits(units, referenceUnits);
   }
 
   function roundMetricScores(records) {
@@ -734,7 +798,7 @@
     return METRIC_KEYS.reduce((sum, key) => sum + (Number.isFinite(scores?.[key]) ? scores[key] : 50) * Number(weights[key] || 0), 0);
   }
 
-  function fitScoreRows(rows, ridgePenalty = 3000) {
+  function fitScoreRows(rows, ridgePenalty = 10) {
     const equalWeights = Object.fromEntries(METRIC_KEYS.map((key) => [key, 1 / METRIC_KEYS.length]));
     if (rows.length < 20) return { weights: equalWeights, correlation: null, sampleN: rows.length, fitted: false, ridgePenalty };
 
@@ -782,16 +846,26 @@
   }
 
   function fitOutcomeWeights(records) {
-    const rows = recordMetricScores(records).filter((row) => Number.isInteger(row.actualRank) && row.actualRank >= 1 && row.actualRank <= 4);
+    const rankedRecords = (Array.isArray(records) ? records : []).filter((record) => {
+      const rank = Number(record?.actualRank);
+      return Number.isInteger(rank) && rank >= 1 && rank <= 4;
+    });
+    const rows = recordMetricScores(rankedRecords);
     const model = fitScoreRows(rows);
     if (!model.fitted || rows.length < 40) return { ...model, validationCorrelation: null, validationFolds: 0 };
     const folds = 5;
     const predictions = Array(rows.length).fill(null);
     for (let fold = 0; fold < folds; fold += 1) {
-      const training = rows.filter((_, index) => index % folds !== fold);
+      const trainingRecords = rankedRecords.filter((_, index) => index % folds !== fold);
+      const holdoutRecords = rankedRecords.filter((_, index) => index % folds === fold);
+      const training = recordMetricScores(trainingRecords);
+      const holdout = recordMetricScores(holdoutRecords, trainingRecords);
       const foldModel = fitScoreRows(training);
-      rows.forEach((row, index) => {
-        if (index % folds === fold) predictions[index] = weightedMetricScore(row.scores, foldModel.weights);
+      let holdoutIndex = 0;
+      rows.forEach((_, index) => {
+        if (index % folds !== fold) return;
+        predictions[index] = weightedMetricScore(holdout[holdoutIndex].scores, foldModel.weights);
+        holdoutIndex += 1;
       });
     }
     return {
@@ -965,6 +1039,8 @@
 
     const dora = martingale(groupRoundEvents(selected, "dora"), 1);
     const effective = martingale(groupRoundEvents(selected, "effective"), 1);
+    const effective2 = martingale(groupRoundEvents(selected, "effective2"), 1);
+    const effective1 = martingale(groupRoundEvents(selected, "effective1"), 1);
     const genbutsu = martingale(groupRoundEvents(selected, "genbutsu"), 1);
     const riichiWin = martingale(groupRoundEvents(selected, "riichiWin"), 1);
     const riichiDealIn = martingale(groupRoundEvents(selected, "riichiDealIn"), -1);
@@ -979,6 +1055,20 @@
     const opponentTenpaiEntry = martingale(groupRoundEvents(selected, "opponentTenpaiEntry"), -1);
     const initialDoraSelf = martingale(groupRoundEvents(selected, "initialDoraSelf"), 1);
     const initialDoraOpponent = martingale(groupRoundEvents(selected, "initialDoraOpponent"), -1);
+    const subjectRawScores = selected.map((record) => rawUnitScores(record.rounds || []));
+    const poolRawScores = allRecords.map((record) => rawUnitScores(record.rounds || []));
+    const experienceOutcomeMetric = (key) => empiricalMetric(
+      subjectRawScores.map((row) => row[key]),
+      poolRawScores.map((row) => row[key]),
+      EXPERIENCE_MIN_POOL,
+      `${key}:${selectedId || "all"}`
+    );
+    const outcomeLuck = experienceOutcomeMetric("outcomeLuck");
+    const tsumoLuck = experienceOutcomeMetric("tsumoLuck");
+    const ronLuck = experienceOutcomeMetric("ronLuck");
+    const dealInAvoidLuck = experienceOutcomeMetric("dealInAvoidLuck");
+    const otherWinAvoidLuck = experienceOutcomeMetric("otherWinAvoidLuck");
+    const chancePoints = experienceOutcomeMetric("chancePoints");
 
     const individual = [
       { key: "deal", label: "配牌和了率", score: deal.percentile, included: deal.included, reason: `経験分布 ${deal.poolN}/${deal.minimum}局` },
@@ -986,6 +1076,8 @@
       { key: "defense", label: "放銃予実幅", score: defense.percentile, included: defense.included, reason: `経験分布 ${defense.poolN}/${defense.minimum}局` },
       { key: "dora", label: "ドラツモ", score: dora.percentile, included: dora.n >= THEORY_MIN_N, reason: `対象 ${dora.n}/${THEORY_MIN_N}ツモ` },
       { key: "effective", label: "有効牌ツモ", score: effective.percentile, included: effective.n >= THEORY_MIN_N, reason: `対象 ${effective.n}/${THEORY_MIN_N}ツモ` },
+      { key: "effective2", label: "2シャンテン時有効牌", score: effective2.percentile, included: effective2.n >= THEORY_MIN_N, reason: `対象 ${effective2.n}/${THEORY_MIN_N}ツモ` },
+      { key: "effective1", label: "1シャンテン時有効牌", score: effective1.percentile, included: effective1.n >= THEORY_MIN_N, reason: `対象 ${effective1.n}/${THEORY_MIN_N}ツモ` },
       { key: "genbutsu", label: "被リーチ時現物", score: genbutsu.percentile, included: genbutsu.n >= RIICHI_MIN_N, reason: `対象 ${genbutsu.n}/${RIICHI_MIN_N}ツモ` },
       { key: "riichiWin", label: "リーチ時自明和了", score: riichiWin.percentile, included: riichiWin.n >= RIICHI_MIN_N, reason: `対象 ${riichiWin.n}/${RIICHI_MIN_N}機会` },
       { key: "riichiDealIn", label: "リーチ後危険牌回避", score: riichiDealIn.percentile, included: riichiDealIn.n >= RIICHI_MIN_N, reason: `対象 ${riichiDealIn.n}/${RIICHI_MIN_N}ツモ` },
@@ -999,15 +1091,22 @@
       { key: "selfTenpaiEntry", label: "テンパイ到達ツモ", score: selfTenpaiEntry.percentile, included: selfTenpaiEntry.n >= THEORY_MIN_N, reason: `対象 ${selfTenpaiEntry.n}/${THEORY_MIN_N}一向聴ツモ` },
       { key: "opponentTenpaiEntry", label: "他家テンパイ到達回避", score: opponentTenpaiEntry.percentile, included: opponentTenpaiEntry.n >= THEORY_MIN_N, reason: `対象 ${opponentTenpaiEntry.n}/${THEORY_MIN_N}他家一向聴ツモ` },
       { key: "initialDoraSelf", label: "自分配牌ドラ", score: initialDoraSelf.percentile, included: initialDoraSelf.n >= THEORY_MIN_N, reason: `対象 ${initialDoraSelf.n}/${THEORY_MIN_N}局` },
-      { key: "initialDoraOpponent", label: "他家配牌ドラ回避", score: initialDoraOpponent.percentile, included: initialDoraOpponent.n >= THEORY_MIN_N, reason: `対象 ${initialDoraOpponent.n}/${THEORY_MIN_N}局` }
+      { key: "initialDoraOpponent", label: "他家配牌ドラ回避", score: initialDoraOpponent.percentile, included: initialDoraOpponent.n >= THEORY_MIN_N, reason: `対象 ${initialDoraOpponent.n}/${THEORY_MIN_N}局` },
+      { key: "outcomeLuck", label: "局結果総合上振れ", score: outcomeLuck.percentile, included: outcomeLuck.included, reason: `経験分布 ${outcomeLuck.poolN}/${outcomeLuck.minimum}対局` },
+      { key: "tsumoLuck", label: "ツモ和了上振れ", score: tsumoLuck.percentile, included: tsumoLuck.included, reason: `経験分布 ${tsumoLuck.poolN}/${tsumoLuck.minimum}対局` },
+      { key: "ronLuck", label: "ロン和了上振れ", score: ronLuck.percentile, included: ronLuck.included, reason: `経験分布 ${ronLuck.poolN}/${ronLuck.minimum}対局` },
+      { key: "dealInAvoidLuck", label: "放銃回避上振れ", score: dealInAvoidLuck.percentile, included: dealInAvoidLuck.included, reason: `経験分布 ${dealInAvoidLuck.poolN}/${dealInAvoidLuck.minimum}対局` },
+      { key: "otherWinAvoidLuck", label: "他家決着回避上振れ", score: otherWinAvoidLuck.percentile, included: otherWinAvoidLuck.included, reason: `経験分布 ${otherWinAvoidLuck.poolN}/${otherWinAvoidLuck.minimum}対局` },
+      { key: "chancePoints", label: "確率決着収支", score: chancePoints.percentile, included: chancePoints.included, reason: `経験分布 ${chancePoints.poolN}/${chancePoints.minimum}対局` }
     ];
     const component = Object.fromEntries(individual.map((item) => [item.key, item]));
     const families = [
       { key: "initial", label: "配牌", items: [component.deal, component.rankDeal] },
       { key: "defense", label: "守備", items: [component.defense, component.genbutsu] },
-      { key: "draw", label: "自分の牌運", items: [component.initialDoraSelf, component.dora, component.effective, component.selfTenpaiEntry, component.selfTenpaiWin] },
+      { key: "draw", label: "自分の牌運", items: [component.initialDoraSelf, component.dora, component.effective, component.effective2, component.effective1, component.selfTenpaiEntry, component.selfTenpaiWin] },
       { key: "riichi", label: "自分リーチ後", items: [component.riichiWin, component.riichiDealIn, component.riichiHitOpponent, component.uraSelf] },
-      { key: "opponents", label: "他家の運", items: [component.initialDoraOpponent, component.opponentDora, component.opponentTenpaiEntry, component.opponentTenpaiWin, component.opponentRiichiWin, component.uraOpponent] }
+      { key: "opponents", label: "他家の運", items: [component.initialDoraOpponent, component.opponentDora, component.opponentTenpaiEntry, component.opponentTenpaiWin, component.opponentRiichiWin, component.uraOpponent] },
+      { key: "outcome", label: "局結果の確率残差", items: [component.outcomeLuck, component.tsumoLuck, component.ronLuck, component.dealInAvoidLuck, component.otherWinAvoidLuck, component.chancePoints] }
     ].map((family) => {
       const included = family.items.filter((item) => item.included && Number.isFinite(item.score));
       return { ...family, included: included.length > 0, score: mean(included.map((item) => item.score)) };
@@ -1035,6 +1134,8 @@
     const theoryDiagnostics = [
       { key: "doraCalibration", label: "ドラツモ：理論値との一致", pValue: dora.n >= THEORY_MIN_N ? dora.pValue : null, n: dora.n, method: "逐次確率残差" },
       { key: "effectiveCalibration", label: "有効牌：理論値との一致", pValue: effective.n >= THEORY_MIN_N ? effective.pValue : null, n: effective.n, method: "逐次確率残差" },
+      { key: "effective2Calibration", label: "2シャンテン時有効牌：理論値との一致", pValue: effective2.n >= THEORY_MIN_N ? effective2.pValue : null, n: effective2.n, method: "逐次確率残差" },
+      { key: "effective1Calibration", label: "1シャンテン時有効牌：理論値との一致", pValue: effective1.n >= THEORY_MIN_N ? effective1.pValue : null, n: effective1.n, method: "逐次確率残差" },
       { key: "genbutsuCalibration", label: "被リーチ時現物：理論値との一致", pValue: genbutsu.n >= RIICHI_MIN_N ? genbutsu.pValue : null, n: genbutsu.n, method: "逐次確率残差" },
       { key: "riichiWinCalibration", label: "リーチ和了牌：理論値との一致", pValue: riichiWin.n >= RIICHI_MIN_N ? riichiWin.pValue : null, n: riichiWin.n, method: "逐次確率残差" },
       { key: "riichiDangerCalibration", label: "リーチ後危険牌：理論値との一致", pValue: riichiDealIn.n >= RIICHI_MIN_N ? riichiDealIn.pValue : null, n: riichiDealIn.n, method: "逐次確率残差" },
@@ -1049,6 +1150,7 @@
       { key: "opponentTenpaiEntryCalibration", label: "他家テンパイ到達：理論値との一致", pValue: opponentTenpaiEntry.n >= THEORY_MIN_N ? opponentTenpaiEntry.pValue : null, n: opponentTenpaiEntry.n, method: "逐次確率残差" },
       { key: "initialDoraSelfCalibration", label: "自分配牌ドラ：理論値との一致", pValue: initialDoraSelf.n >= THEORY_MIN_N ? initialDoraSelf.pValue : null, n: initialDoraSelf.n, method: "有限母集団残差" },
       { key: "initialDoraOpponentCalibration", label: "他家配牌ドラ：理論値との一致", pValue: initialDoraOpponent.n >= THEORY_MIN_N ? initialDoraOpponent.pValue : null, n: initialDoraOpponent.n, method: "有限母集団残差" },
+      { key: "chancePointsFit", label: "確率決着収支：経験分布適合", pValue: chancePoints.included ? chancePoints.pValue : null, n: chancePoints.n, method: "経験分布bootstrap" },
       { key: "seat", label: "有効牌残差 × 親からの席順", pValue: seatTest.pValue, n: seatTest.n, method: "半荘内置換検定" },
       { key: "serial", label: "有効牌残差の局間連続性", pValue: serialTest.pValue, n: serialTest.n, method: "半荘内順序置換" }
     ];
@@ -1056,6 +1158,11 @@
       { key: "dealFit", label: "配牌和了率：経験分布適合", pValue: deal.included ? deal.pValue : null, n: deal.n, method: "経験分布bootstrap" },
       { key: "rankFit", label: "配牌時平着変動：経験分布適合", pValue: rankDeal.included ? rankDeal.pValue : null, n: rankDeal.n, method: "経験分布bootstrap" },
       { key: "defenseFit", label: "放銃予実幅：経験分布適合", pValue: defense.included ? defense.pValue : null, n: defense.n, method: "経験分布bootstrap" },
+      { key: "outcomeLuckFit", label: "局結果総合残差：経験分布適合", pValue: outcomeLuck.included ? outcomeLuck.pValue : null, n: outcomeLuck.n, method: "BigCoach予測×経験分布" },
+      { key: "tsumoLuckFit", label: "ツモ和了残差：経験分布適合", pValue: tsumoLuck.included ? tsumoLuck.pValue : null, n: tsumoLuck.n, method: "BigCoach予測×経験分布" },
+      { key: "ronLuckFit", label: "ロン和了残差：経験分布適合", pValue: ronLuck.included ? ronLuck.pValue : null, n: ronLuck.n, method: "BigCoach予測×経験分布" },
+      { key: "dealInAvoidLuckFit", label: "放銃回避残差：経験分布適合", pValue: dealInAvoidLuck.included ? dealInAvoidLuck.pValue : null, n: dealInAvoidLuck.n, method: "BigCoach予測×経験分布" },
+      { key: "otherWinAvoidLuckFit", label: "他家決着回避残差：経験分布適合", pValue: otherWinAvoidLuck.included ? otherWinAvoidLuck.pValue : null, n: otherWinAvoidLuck.n, method: "BigCoach予測×経験分布" },
       { key: "dealSeat", label: "配牌和了率 × 親からの席順", pValue: dealSeat.pValue, n: dealSeat.n, method: "半荘内置換検定" },
       { key: "dealSerial", label: "配牌和了率の局間連続性", pValue: dealSerial.pValue, n: dealSerial.n, method: "半荘内順序置換" },
       { key: "rankSeat", label: "平着変動 × 親からの席順", pValue: rankSeat.pValue, n: rankSeat.n, method: "半荘内置換検定" },
@@ -1083,6 +1190,8 @@
       defense,
       dora,
       effective,
+      effective2,
+      effective1,
       genbutsu,
       riichiWin,
       riichiDealIn,
@@ -1097,6 +1206,12 @@
       opponentTenpaiEntry,
       initialDoraSelf,
       initialDoraOpponent,
+      outcomeLuck,
+      tsumoLuck,
+      ronLuck,
+      dealInAvoidLuck,
+      otherWinAvoidLuck,
+      chancePoints,
       overall: {
         score: overallScore,
         u: overallScore == null ? null : overallScore / 100,

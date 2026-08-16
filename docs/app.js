@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 5;
+  const CACHE_VERSION = 6;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -16,9 +16,10 @@
   let scope = "all";
   let trendLimit = "50";
   const trendVisible = new Set([
-    "overall", "deal", "rankDeal", "defense", "dora", "effective", "riichiWin", "riichiDealIn", "genbutsu",
+    "overall", "deal", "rankDeal", "defense", "dora", "effective", "effective2", "effective1", "riichiWin", "riichiDealIn", "genbutsu",
     "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
-    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent"
+    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent",
+    "outcomeLuck", "tsumoLuck", "ronLuck", "dealInAvoidLuck", "otherWinAvoidLuck", "chancePoints"
   ]);
   const METRIC_LABELS = {
     deal: "配牌時和了率",
@@ -26,6 +27,8 @@
     defense: "放銃予実幅",
     dora: "ドラツモ率",
     effective: "有効牌ツモ率",
+    effective2: "2シャンテン時有効牌",
+    effective1: "1シャンテン時有効牌",
     riichiWin: "リーチ時自明和了率",
     riichiDealIn: "リーチ後危険牌回避度",
     genbutsu: "被リーチ時現物掴み率",
@@ -39,7 +42,13 @@
     selfTenpaiEntry: "テンパイ到達ツモ",
     opponentTenpaiEntry: "他家テンパイ到達回避",
     initialDoraSelf: "自分配牌ドラ",
-    initialDoraOpponent: "他家配牌ドラ回避"
+    initialDoraOpponent: "他家配牌ドラ回避",
+    outcomeLuck: "局結果総合上振れ",
+    tsumoLuck: "ツモ和了上振れ",
+    ronLuck: "ロン和了上振れ",
+    dealInAvoidLuck: "放銃回避上振れ",
+    otherWinAvoidLuck: "他家決着回避上振れ",
+    chancePoints: "確率決着収支"
   };
 
   const elements = {
@@ -160,6 +169,8 @@
         defense: compactEvents(round.defense),
         dora: compactEvents(round.dora),
         effective: compactEvents(round.effective),
+        effective2: compactEvents(round.effective2),
+        effective1: compactEvents(round.effective1),
         genbutsu: compactEvents(round.genbutsu),
         riichiWin: compactEvents(round.riichiWin),
         riichiDealIn: compactEvents(round.riichiDealIn),
@@ -174,6 +185,12 @@
         opponentTenpaiEntry: compactEvents(round.opponentTenpaiEntry),
         initialDoraSelf: compactEvents(round.initialDoraSelf),
         initialDoraOpponent: compactEvents(round.initialDoraOpponent),
+        outcomeLuck: compactEvents(round.outcomeLuck),
+        tsumoLuck: compactEvents(round.tsumoLuck),
+        ronLuck: compactEvents(round.ronLuck),
+        dealInAvoidLuck: compactEvents(round.dealInAvoidLuck),
+        otherWinAvoidLuck: compactEvents(round.otherWinAvoidLuck),
+        chancePoints: Number.isFinite(Number(round.chancePoints)) ? Number(round.chancePoints) : 0,
         theorySupported: Boolean(round.theorySupported)
       }))
     };
@@ -520,10 +537,12 @@
       ? "総合運に入れられる指標がまだありません。"
       : `${overall.included.length}/${overall.totalComponents}指標のU[0,1]を、実着順との相関が最大になる非負の係数で加重。Uは上振れ方向の累積確率で、両側p値ではありません。`;
     const weightText = Object.entries(overall.weights || {})
+      .filter(([, weight]) => Number(weight) >= 0.0005)
+      .sort((left, right) => Number(right[1]) - Number(left[1]))
       .map(([key, weight]) => `${METRIC_LABELS[key]} ${formatNumber(weight * 100, 1)}%`)
       .join(" / ");
     document.querySelector("#overall-model").textContent = overall.fittedWeights
-      ? `目的変数=5−着順、対象なしはU=0.5で補完する非負リッジ回帰 · 5分割検証 r=${formatNumber(overall.validationCorrelation, 3)} / 学習内 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局、L2=${formatNumber(overall.ridgePenalty, 0)}）· 重み: ${weightText}`
+      ? `目的変数=5−着順、対象なしはU=0.5で補完する非負リッジ回帰 · 対局後の説明相関: 5分割検証 r=${formatNumber(overall.validationCorrelation, 3)} / 学習内 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局、L2=${formatNumber(overall.ridgePenalty, 0)}）· 重み（0.05%未満は省略）: ${weightText}`
       : `実着順を保存した対局が不足しているため均等重みです（${overall.correlationN}/20対局）。既存履歴は元の差分JSONを再取り込みすると着順が補完されます。`;
     const overallComponents = document.querySelector("#overall-components");
     overallComponents.replaceChildren(
@@ -535,6 +554,8 @@
     setExperienceMetric("defense", summary.defense, (result) => `実績放銃 ${formatNumber(result.observed, 0)} / 予測合計 ${formatNumber(result.predicted, 2)}（${result.events}打牌）`);
     setTheoryMetric("dora", summary.dora, "回");
     setTheoryMetric("effective", summary.effective, "回");
+    setTheoryMetric("effective-2", summary.effective2, "回");
+    setTheoryMetric("effective-1", summary.effective1, "回");
     setTheoryMetric("riichi-win", summary.riichiWin, "回");
     setTheoryMetric("riichi-danger", summary.riichiDealIn, "回");
     setTheoryMetric("genbutsu", summary.genbutsu, "回");
@@ -549,6 +570,12 @@
     setTheoryMetric("opponent-tenpai-entry", summary.opponentTenpaiEntry, "回");
     setTheoryMetric("initial-dora-self", summary.initialDoraSelf, "枚");
     setTheoryMetric("initial-dora-opponent", summary.initialDoraOpponent, "枚");
+    setExperienceMetric("outcome-luck", summary.outcomeLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
+    setExperienceMetric("tsumo-luck", summary.tsumoLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
+    setExperienceMetric("ron-luck", summary.ronLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
+    setExperienceMetric("dealin-avoid-luck", summary.dealInAvoidLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
+    setExperienceMetric("otherwin-avoid-luck", summary.otherWinAvoidLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
+    setExperienceMetric("chance-points", summary.chancePoints, (result) => `平均 ${signed(result.value, 1)}千点`);
     renderFairness(summary.fairness);
   }
 
@@ -630,6 +657,8 @@
       { key: "defense", label: METRIC_LABELS.defense, color: "#b45145", width: 1.8 },
       { key: "dora", label: METRIC_LABELS.dora, color: "#287cb5", width: 1.8 },
       { key: "effective", label: METRIC_LABELS.effective, color: "#2d9aa0", width: 1.8 },
+      { key: "effective2", label: METRIC_LABELS.effective2, color: "#23858d", width: 1.8 },
+      { key: "effective1", label: METRIC_LABELS.effective1, color: "#35aeb4", width: 1.8 },
       { key: "riichiWin", label: METRIC_LABELS.riichiWin, color: "#7656a8", width: 1.8 },
       { key: "riichiDealIn", label: METRIC_LABELS.riichiDealIn, color: "#b04f91", width: 1.8 },
       { key: "genbutsu", label: METRIC_LABELS.genbutsu, color: "#70843b", width: 1.8 },
@@ -643,7 +672,13 @@
       { key: "uraOpponent", label: METRIC_LABELS.uraOpponent, color: "#be6b35", width: 1.8 },
       { key: "opponentTenpaiWin", label: METRIC_LABELS.opponentTenpaiWin, color: "#7c6530", width: 1.8 },
       { key: "opponentTenpaiEntry", label: METRIC_LABELS.opponentTenpaiEntry, color: "#58733a", width: 1.8 },
-      { key: "initialDoraOpponent", label: METRIC_LABELS.initialDoraOpponent, color: "#3d7764", width: 1.8 }
+      { key: "initialDoraOpponent", label: METRIC_LABELS.initialDoraOpponent, color: "#3d7764", width: 1.8 },
+      { key: "outcomeLuck", label: METRIC_LABELS.outcomeLuck, color: "#c03d55", width: 2.2 },
+      { key: "tsumoLuck", label: METRIC_LABELS.tsumoLuck, color: "#df6650", width: 1.8 },
+      { key: "ronLuck", label: METRIC_LABELS.ronLuck, color: "#e68b42", width: 1.8 },
+      { key: "dealInAvoidLuck", label: METRIC_LABELS.dealInAvoidLuck, color: "#7f557d", width: 1.8 },
+      { key: "otherWinAvoidLuck", label: METRIC_LABELS.otherWinAvoidLuck, color: "#6b728e", width: 1.8 },
+      { key: "chancePoints", label: METRIC_LABELS.chancePoints, color: "#a7286a", width: 2.2 }
     ];
     for (const item of series) {
       const chip = document.createElement("label");
