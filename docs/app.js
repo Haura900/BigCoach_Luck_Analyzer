@@ -60,6 +60,8 @@
     status: document.querySelector("#import-status"),
     bookmarklet: document.querySelector("#bookmarklet"),
     historyBookmarklet: document.querySelector("#history-bookmarklet"),
+    historyBookmarkletCopy: document.querySelector("#history-bookmarklet-copy"),
+    historyBookmarkletFallback: document.querySelector("#history-bookmarklet-fallback"),
     historyPlayer: document.querySelector("#history-player"),
     demo: document.querySelector("#demo-button"),
     empty: document.querySelector("#empty-state"),
@@ -852,31 +854,76 @@
       }
     });
 
+    let historyBookmarkletUrl = "";
     const updateHistoryBookmarklet = () => {
       const target = elements.historyPlayer.value.trim();
       localStorage.setItem(PLAYER_NAME_KEY, target);
       if (!target) {
+        historyBookmarkletUrl = "";
         elements.historyBookmarklet.href = "#";
         elements.historyBookmarklet.textContent = "先にプレイヤー名を入力";
         elements.historyBookmarklet.setAttribute("aria-disabled", "true");
+        elements.historyBookmarkletCopy.disabled = true;
         return;
       }
       const historyCode = `(async()=>{let box;const target=__TARGET__,norm=x=>String(x??'').normalize('NFKC').trim().toLocaleLowerCase('ja-JP'),key='bigcoach-luck-sync:v2:'+norm(target);try{if(!location.pathname.startsWith('/account/history'))throw Error('BigCoachの履歴画面で実行してください');box=document.createElement('div');Object.assign(box.style,{position:'fixed',right:'18px',bottom:'18px',zIndex:2147483647,padding:'14px 18px',borderRadius:'10px',background:'#10201c',color:'#fff',font:'13px sans-serif',boxShadow:'0 8px 30px #0006'});box.textContent='Luck差分取得: 実戦履歴を確認中…';document.body.append(box);let state;try{state=JSON.parse(localStorage.getItem(key)||'{}')}catch{state={}}const done=state.done&&typeof state.done==='object'?state.done:{},save=()=>localStorage.setItem(key,JSON.stringify({target,updatedAt:new Date().toISOString(),done}));let rows=[],offset=0,total=1;while(offset<total){const res=await fetch('/api/v2/membership/history?limit=100&offset='+offset+'&category=real',{credentials:'include'});if(!res.ok)throw Error('履歴API HTTP '+res.status);const raw=await res.json(),page=raw?.success===false?null:(raw?.data||raw);if(!page)throw Error(raw?.error?.message||'履歴を取得できません');const batch=Array.isArray(page.items)?page.items:[];rows.push(...batch);total=Number(page.total??rows.length);if(!batch.length)break;offset+=batch.length;box.textContent='Luck差分取得: 実戦履歴 '+Math.min(offset,total)+' / '+total;}const unique=[...new Map(rows.filter(x=>x?.taskId).map(x=>[String(x.taskId),x])).values()],items=[],failures=[];for(const row of unique){const id=String(row.taskId);if(done[id])continue;if(row.reviewKind==='what_cut'){done[id]={status:'not-real',at:new Date().toISOString()};continue}if(norm(row.playerName)!==norm(target)){done[id]={status:'other-player',at:new Date().toISOString()};continue}box.textContent='Luck差分取得: 未取得JSON '+(items.length+failures.length+1)+'件目';try{const response=await fetch('/api/v2/tasks/'+encodeURIComponent(id)+'/result',{credentials:'include'});if(!response.ok)throw Error('HTTP '+response.status);const result=await response.json();if(!result?.success||!result?.data?.jsonUrl)throw Error(result?.message||'JSON URLなし');const dataResponse=await fetch(result.data.jsonUrl,{credentials:'include'});if(!dataResponse.ok)throw Error('JSON HTTP '+dataResponse.status);const data=await dataResponse.json(),platform=row.platform||row.sourcePlatform||row.gamePlatform||result.data?.paipuInfo?.platform||result.data?.platform||null,table=row.table||row.ruleName||result.data?.paipuInfo?.rule||null;items.push({taskId:id,sourceUrl:location.origin+'/review/'+id,title:[row.playerName,row.lastSubmittedAt?new Date(row.lastSubmittedAt).toLocaleDateString('ja-JP'):null,platform].filter(Boolean).join(' · ')||'BigCoach '+id.slice(0,8),playerName:row.playerName,submittedAt:row.lastSubmittedAt||null,platform,table,data});done[id]={status:'downloaded',at:new Date().toISOString()};save()}catch(e){failures.push({taskId:id,error:e.message})}}save();box.remove();if(!items.length){alert(target+'の未取得の実戦牌譜はありませんでした。'+(failures.length?' 再試行対象: '+failures.length+'件':''));return}const bundle={kind:'bigcoach-luck-bundle',version:2,mode:'incremental',targetPlayer:target,category:'real',exportedAt:new Date().toISOString(),source:location.href,items,failures};const blob=new Blob([JSON.stringify(bundle)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='bigcoach-luck-'+target.replace(/[\\/:*?"<>|]/g,'_')+'-diff-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);alert(target+'の未取得実戦牌譜 '+items.length+'件を保存しました。'+(failures.length?' 取得失敗 '+failures.length+'件は次回再試行します。':''));}catch(e){box?.remove();alert('差分取得できませんでした: '+e.message)}})()`
         .replace("__TARGET__", JSON.stringify(target));
-      elements.historyBookmarklet.href = `javascript:${encodeURIComponent(historyCode)}`;
+      historyBookmarkletUrl = `javascript:${encodeURIComponent(historyCode)}`;
+      elements.historyBookmarklet.href = historyBookmarkletUrl;
       elements.historyBookmarklet.textContent = `${target}の未取得実戦を保存`;
       elements.historyBookmarklet.removeAttribute("aria-disabled");
+      elements.historyBookmarkletCopy.disabled = false;
     };
     elements.historyPlayer.value = localStorage.getItem(PLAYER_NAME_KEY) || "";
     elements.historyPlayer.addEventListener("input", updateHistoryBookmarklet);
     updateHistoryBookmarklet();
-    elements.historyBookmarklet.addEventListener("click", (event) => {
-      if (location.protocol.startsWith("http")) {
+    elements.historyBookmarklet.addEventListener("dragstart", (event) => {
+      if (!historyBookmarkletUrl) {
         event.preventDefault();
-        const target = elements.historyPlayer.value.trim();
-        setStatus(target
-          ? `「${target}の未取得実戦を保存」をブックマークバーへドラッグし、BigCoachの履歴画面で実行してください。`
-          : "先にBigCoachのプレイヤー名を入力してください。", "loading");
+        return;
+      }
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "copyLink";
+        event.dataTransfer.setData("text/uri-list", historyBookmarkletUrl);
+        event.dataTransfer.setData("text/plain", historyBookmarkletUrl);
+      }
+    });
+    const copyHistoryBookmarklet = async () => {
+      if (!historyBookmarkletUrl) {
+        setStatus("先にBigCoachのプレイヤー名を入力してください。", "error");
+        return false;
+      }
+      try {
+        await navigator.clipboard.writeText(historyBookmarkletUrl);
+      } catch {
+        const textarea = document.createElement("textarea");
+        textarea.value = historyBookmarkletUrl;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.append(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        if (!copied) throw new Error("クリップボードへコピーできませんでした。");
+      }
+      elements.historyBookmarkletFallback.open = true;
+      setStatus("登録コードをコピーしました。ブックマークバーの空白を右クリック →「ページを追加」→ URL欄へ貼り付けて保存してください。", "success");
+      return true;
+    };
+    elements.historyBookmarklet.addEventListener("click", async (event) => {
+      if (!location.protocol.startsWith("http")) return;
+      event.preventDefault();
+      try {
+        await copyHistoryBookmarklet();
+      } catch (error) {
+        setStatus(error.message, "error");
+      }
+    });
+    elements.historyBookmarkletCopy.addEventListener("click", async () => {
+      try {
+        await copyHistoryBookmarklet();
+      } catch (error) {
+        setStatus(error.message, "error");
       }
     });
   }
