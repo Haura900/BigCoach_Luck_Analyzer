@@ -17,6 +17,7 @@
   let trendLimit = "50";
   const trendVisible = new Set(["actualRankPlot", "overall"]);
   let trendSelectionInitialized = false;
+  let trendCsvRows = [];
   const METRIC_LABELS = {
     deal: "配牌時和了率",
     rankDeal: "配牌時平着変動",
@@ -75,7 +76,8 @@
     trendSection: document.querySelector("#trend-section"),
     trendChart: document.querySelector("#trend-chart"),
     trendLegend: document.querySelector("#trend-legend"),
-    trendLimit: document.querySelector("#trend-limit")
+    trendLimit: document.querySelector("#trend-limit"),
+    trendCsv: document.querySelector("#trend-csv-button")
   };
 
   const DEMO_DATA = {
@@ -644,7 +646,11 @@
     elements.trendSection.hidden = records.length === 0;
     elements.trendChart.replaceChildren();
     elements.trendLegend.replaceChildren();
-    if (!records.length) return;
+    if (!records.length) {
+      trendCsvRows = [];
+      elements.trendCsv.disabled = true;
+      return;
+    }
 
     const chronological = records
       .map((record, index) => ({ record, index, time: Date.parse(record.importedAt) || 0 }))
@@ -665,6 +671,8 @@
     }));
     const limit = trendLimit === "all" ? allPoints.length : Number(trendLimit);
     const points = allPoints.slice(-Math.max(1, limit));
+    trendCsvRows = points;
+    elements.trendCsv.disabled = points.length === 0;
     const series = [
       { key: "actualRankPlot", label: "実際の着順", color: "#111827", width: 2.4, dash: "7 4" },
       { key: "overall", label: "総合運", color: "#12614f", width: 3.5 },
@@ -838,6 +846,42 @@
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
+  function csvCell(value) {
+    if (value == null || value === "") return "";
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    let text = String(value);
+    if (/^[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function csvLuck(value) {
+    return Number.isFinite(Number(value)) ? (Number(value) / 100).toFixed(6) : "";
+  }
+
+  function downloadTrendCsv() {
+    if (!trendCsvRows.length) return;
+    const metricColumns = Object.entries(METRIC_LABELS);
+    const header = ["半荘番号", "取込日時", "対局", "実際の着順", "総合運U", ...metricColumns.map(([, label]) => `${label} U`)];
+    const rows = trendCsvRows.map((row) => {
+      const time = Date.parse(row.date);
+      return [
+        row.gameIndex + 1,
+        Number.isFinite(time) ? new Date(time).toISOString() : row.date || "",
+        row.title || "",
+        Number.isInteger(row.actualRank) ? row.actualRank : "",
+        csvLuck(row.overall),
+        ...metricColumns.map(([key]) => csvLuck(row[key]))
+      ];
+    });
+    const csv = [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `bigcoach-luck-trend-${trendLimit}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
   function buildBookmarklet() {
     const code = `(async()=>{try{const m=location.pathname.match(/\\/review\\/([^/?#]+)/);if(!m)throw Error('BigCoachのレビュー画面で実行してください');const r=await fetch('/api/v2/tasks/'+encodeURIComponent(m[1])+'/result',{credentials:'include'}).then(x=>x.json());if(!r?.success||!r?.data?.jsonUrl)throw Error(r?.message||'JSON URLを取得できません');const d=await fetch(r.data.jsonUrl,{credentials:'include'}).then(x=>x.json());const t=JSON.stringify(d);try{await navigator.clipboard.writeText(t);alert('Luck Analyzer用JSONをコピーしました。解析サイトのJSON / HTML欄へ貼り付けてください。')}catch{const b=new Blob([t],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='bigcoach-'+m[1]+'.json';a.click();alert('JSONをダウンロードしました。解析サイトのファイル欄から選択してください。')}}catch(e){alert('取得できませんでした: '+e.message)}})()`;
     elements.bookmarklet.href = `javascript:${encodeURIComponent(code)}`;
@@ -954,6 +998,7 @@
     trendLimit = elements.trendLimit.value;
     renderTrend();
   });
+  elements.trendCsv.addEventListener("click", downloadTrendCsv);
 
   async function initialize() {
     buildBookmarklet();

@@ -151,6 +151,8 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /ふだんは、こちらだけ使います/);
   assert.match(html, /id="trend-chart"/);
   assert.match(html, /id="trend-limit"/);
+  assert.match(html, /id="trend-csv-button"/);
+  assert.match(html, /表示中の推移をCSV保存/);
   assert.match(html, /id="record-select"/);
   assert.match(html, /id="ura-self-percentile"/);
   assert.match(html, /id="opponent-tenpai-win-percentile"/);
@@ -175,6 +177,9 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.doesNotMatch(app, /roundMetricScores\(chronological\)/);
   assert.doesNotMatch(app, /topFive\.forEach/);
   assert.match(app, /actualRankPlot/);
+  assert.match(app, /function downloadTrendCsv\(\)/);
+  assert.match(app, /Object\.entries\(METRIC_LABELS\)/);
+  assert.match(app, /text\/csv;charset=utf-8/);
   assert.match(app, /empiricalPercentile\(rawOverallScores\[gameIndex\], rawOverallScores\)/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });
