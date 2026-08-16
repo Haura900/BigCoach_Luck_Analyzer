@@ -48,8 +48,17 @@
             <li>
               <b>2</b>
               <div>
-                <strong>下のボタンをブックマークバーへドラッグして登録</strong>
-                <a id="history-bookmarklet" class="bookmarklet bookmarklet-primary" href="#" aria-disabled="true">先にプレイヤー名を入力</a>
+                <strong>下のボタンをブックマークバーへドラッグして登録（クリックならコードをコピー）</strong>
+                <a id="history-bookmarklet" class="bookmarklet bookmarklet-primary" href="#" draggable="true" aria-disabled="true">先にプレイヤー名を入力</a>
+                <details id="history-bookmarklet-fallback" class="bookmarklet-fallback">
+                  <summary>ドラッグできない場合はこちら</summary>
+                  <button id="history-bookmarklet-copy" class="copy-bookmarklet-button" type="button" disabled>登録コードをコピー</button>
+                  <ol>
+                    <li><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> でブックマークバーを表示</li>
+                    <li>バーの空白を右クリック →「ページを追加」</li>
+                    <li>名前は任意、URL欄へコピーしたコードを貼り付けて保存</li>
+                  </ol>
+                </details>
                 <small>登録後、<a href="https://gokujan.com/account/history" target="_blank" rel="noreferrer">BigCoachの履歴画面を開く ↗</a> → 登録したブックマークを実行します。</small>
               </div>
             </li>

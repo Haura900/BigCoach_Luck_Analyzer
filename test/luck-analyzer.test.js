@@ -120,6 +120,9 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   const html = fs.readFileSync(path.join(__dirname, "..", "docs", "index.html"), "utf8");
   const app = fs.readFileSync(path.join(__dirname, "..", "docs", "app.js"), "utf8");
   assert.match(html, /id="history-player"/);
+  assert.match(html, /id="history-bookmarklet-copy"/);
+  assert.match(html, /ドラッグできない場合はこちら/);
+  assert.match(html, /ページを追加/);
   assert.match(html, /ふだんは、こちらだけ使います/);
   assert.match(html, /id="trend-chart"/);
   assert.match(html, /id="trend-limit"/);
@@ -138,6 +141,8 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.doesNotMatch(app, /const target='はうらC'/);
   assert.match(app, /indexedDB\.open/);
   assert.match(app, /analysis-cache/);
+  assert.match(app, /dataTransfer\.setData\("text\/uri-list"/);
+  assert.match(app, /navigator\.clipboard\.writeText\(historyBookmarkletUrl\)/);
   assert.match(app, /validationCorrelation/);
   assert.match(app, /initializeTrendSelection\(model\.weights\)/);
   assert.match(app, /recordMetricScores\(chronological\)/);
