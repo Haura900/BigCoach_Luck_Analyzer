@@ -396,14 +396,17 @@
           <p class="eyebrow">LUCK TREND</p>
           <h2 id="trend-title">運量の推移</h2>
         </div>
-        <label class="trend-limit">表示する半荘数
-          <select id="trend-limit">
-            <option value="25">25半荘</option>
-            <option value="50" selected>50半荘</option>
-            <option value="100">100半荘</option>
-            <option value="all">全半荘</option>
-          </select>
-        </label>
+        <div class="trend-actions">
+          <label class="trend-limit">表示する半荘数
+            <select id="trend-limit">
+              <option value="25">25半荘</option>
+              <option value="50" selected>50半荘</option>
+              <option value="100">100半荘</option>
+              <option value="all">全半荘</option>
+            </select>
+          </label>
+          <button id="trend-csv-button" class="ghost-button" type="button" disabled>表示中の推移をCSV保存</button>
+        </div>
       </div>
       <div id="trend-legend" class="trend-legend"></div>
       <div class="trend-chart-wrap">
