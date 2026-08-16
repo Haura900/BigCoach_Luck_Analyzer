@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 7;
+  const CACHE_VERSION = 8;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -15,7 +15,7 @@
   let selectedId = null;
   let scope = "all";
   let trendLimit = "50";
-  const trendVisible = new Set(["overall"]);
+  const trendVisible = new Set(["actualRankPlot", "overall"]);
   let trendSelectionInitialized = false;
   const METRIC_LABELS = {
     deal: "配牌時和了率",
@@ -25,6 +25,12 @@
     effective: "有効牌ツモ率",
     effective2: "2シャンテン時有効牌",
     effective1: "1シャンテン時有効牌",
+    genbutsu1: "被リーチ・1シャンテン時現物",
+    genbutsuTenpai: "被リーチ・聴牌時現物",
+    fuuroGenbutsu: "被副露時現物",
+    fuuroGenbutsu1: "被副露・1シャンテン時現物",
+    fuuroGenbutsuTenpai: "被副露・聴牌時現物",
+    wasteDraw: "無駄ツモ回避度",
     riichiWin: "リーチ時自明和了率",
     riichiDealIn: "リーチ後危険牌回避度",
     genbutsu: "被リーチ時現物掴み率",
@@ -39,12 +45,7 @@
     opponentTenpaiEntry: "他家テンパイ到達回避",
     initialDoraSelf: "自分配牌ドラ",
     initialDoraOpponent: "他家配牌ドラ回避",
-    outcomeLuck: "局結果総合上振れ",
-    tsumoLuck: "ツモ和了上振れ",
-    ronLuck: "ロン和了上振れ",
-    dealInAvoidLuck: "放銃回避上振れ",
-    otherWinAvoidLuck: "他家決着回避上振れ",
-    chancePoints: "確率決着収支"
+    otherWinAvoidLuck: "他家決着回避上振れ"
   };
 
   const elements = {
@@ -168,6 +169,12 @@
         effective2: compactEvents(round.effective2),
         effective1: compactEvents(round.effective1),
         genbutsu: compactEvents(round.genbutsu),
+        genbutsu1: compactEvents(round.genbutsu1),
+        genbutsuTenpai: compactEvents(round.genbutsuTenpai),
+        fuuroGenbutsu: compactEvents(round.fuuroGenbutsu),
+        fuuroGenbutsu1: compactEvents(round.fuuroGenbutsu1),
+        fuuroGenbutsuTenpai: compactEvents(round.fuuroGenbutsuTenpai),
+        wasteDraw: compactEvents(round.wasteDraw),
         riichiWin: compactEvents(round.riichiWin),
         riichiDealIn: compactEvents(round.riichiDealIn),
         riichiHitOpponent: compactEvents(round.riichiHitOpponent),
@@ -181,12 +188,7 @@
         opponentTenpaiEntry: compactEvents(round.opponentTenpaiEntry),
         initialDoraSelf: compactEvents(round.initialDoraSelf),
         initialDoraOpponent: compactEvents(round.initialDoraOpponent),
-        outcomeLuck: compactEvents(round.outcomeLuck),
-        tsumoLuck: compactEvents(round.tsumoLuck),
-        ronLuck: compactEvents(round.ronLuck),
-        dealInAvoidLuck: compactEvents(round.dealInAvoidLuck),
         otherWinAvoidLuck: compactEvents(round.otherWinAvoidLuck),
-        chancePoints: Number.isFinite(Number(round.chancePoints)) ? Number(round.chancePoints) : 0,
         theorySupported: Boolean(round.theorySupported)
       }))
     };
@@ -555,6 +557,12 @@
     setTheoryMetric("riichi-win", summary.riichiWin, "回");
     setTheoryMetric("riichi-danger", summary.riichiDealIn, "回");
     setTheoryMetric("genbutsu", summary.genbutsu, "回");
+    setTheoryMetric("genbutsu-1", summary.genbutsu1, "回");
+    setTheoryMetric("genbutsu-tenpai", summary.genbutsuTenpai, "回");
+    setTheoryMetric("fuuro-genbutsu", summary.fuuroGenbutsu, "回");
+    setTheoryMetric("fuuro-genbutsu-1", summary.fuuroGenbutsu1, "回");
+    setTheoryMetric("fuuro-genbutsu-tenpai", summary.fuuroGenbutsuTenpai, "回");
+    setTheoryMetric("waste-draw", summary.wasteDraw, "回");
     setTheoryMetric("riichi-hit-opponent", summary.riichiHitOpponent, "回");
     setTheoryMetric("ura-self", summary.uraSelf, "枚");
     setTheoryMetric("opponent-dora", summary.opponentDora, "回");
@@ -566,12 +574,7 @@
     setTheoryMetric("opponent-tenpai-entry", summary.opponentTenpaiEntry, "回");
     setTheoryMetric("initial-dora-self", summary.initialDoraSelf, "枚");
     setTheoryMetric("initial-dora-opponent", summary.initialDoraOpponent, "枚");
-    setExperienceMetric("outcome-luck", summary.outcomeLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
-    setExperienceMetric("tsumo-luck", summary.tsumoLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
-    setExperienceMetric("ron-luck", summary.ronLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
-    setExperienceMetric("dealin-avoid-luck", summary.dealInAvoidLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
     setExperienceMetric("otherwin-avoid-luck", summary.otherWinAvoidLuck, (result) => `標準化残差 ${signed(result.value, 2)}`);
-    setExperienceMetric("chance-points", summary.chancePoints, (result) => `平均 ${signed(result.value, 1)}千点`);
     renderFairness(summary.fairness);
   }
 
@@ -632,6 +635,7 @@
       .slice(0, 5)
       .map(([key]) => key);
     trendVisible.clear();
+    trendVisible.add("actualRankPlot");
     trendVisible.add("overall");
     topFive.forEach((key) => trendVisible.add(key));
     trendSelectionInitialized = true;
@@ -657,12 +661,14 @@
       title: row.title,
       roundLabel: row.roundLabel,
       actualRank: row.actualRank,
+      actualRankPlot: Number.isInteger(row.actualRank) ? (4 - row.actualRank) / 3 * 100 : null,
       ...row.scores,
       overall: analyzer.empiricalPercentile(rawOverallScores[roundIndex], rawOverallScores)
     }));
     const limit = trendLimit === "all" ? allPoints.length : Number(trendLimit);
     const points = allPoints.slice(-Math.max(1, limit));
     const series = [
+      { key: "actualRankPlot", label: "実際の着順", color: "#111827", width: 2.4, dash: "7 4" },
       { key: "overall", label: "総合運", color: "#12614f", width: 3.5 },
       { key: "deal", label: METRIC_LABELS.deal, color: "#d98d3b", width: 1.8 },
       { key: "rankDeal", label: METRIC_LABELS.rankDeal, color: "#b66a2b", width: 1.8 },
@@ -674,6 +680,12 @@
       { key: "riichiWin", label: METRIC_LABELS.riichiWin, color: "#7656a8", width: 1.8 },
       { key: "riichiDealIn", label: METRIC_LABELS.riichiDealIn, color: "#b04f91", width: 1.8 },
       { key: "genbutsu", label: METRIC_LABELS.genbutsu, color: "#70843b", width: 1.8 },
+      { key: "genbutsu1", label: METRIC_LABELS.genbutsu1, color: "#849b47", width: 1.8 },
+      { key: "genbutsuTenpai", label: METRIC_LABELS.genbutsuTenpai, color: "#627532", width: 1.8 },
+      { key: "fuuroGenbutsu", label: METRIC_LABELS.fuuroGenbutsu, color: "#507a5b", width: 1.8 },
+      { key: "fuuroGenbutsu1", label: METRIC_LABELS.fuuroGenbutsu1, color: "#669873", width: 1.8 },
+      { key: "fuuroGenbutsuTenpai", label: METRIC_LABELS.fuuroGenbutsuTenpai, color: "#3e6248", width: 1.8 },
+      { key: "wasteDraw", label: METRIC_LABELS.wasteDraw, color: "#3c8992", width: 1.8 },
       { key: "riichiHitOpponent", label: METRIC_LABELS.riichiHitOpponent, color: "#8e5a9b", width: 1.8 },
       { key: "uraSelf", label: METRIC_LABELS.uraSelf, color: "#d14f73", width: 1.8 },
       { key: "selfTenpaiWin", label: METRIC_LABELS.selfTenpaiWin, color: "#6246a8", width: 1.8 },
@@ -685,12 +697,7 @@
       { key: "opponentTenpaiWin", label: METRIC_LABELS.opponentTenpaiWin, color: "#7c6530", width: 1.8 },
       { key: "opponentTenpaiEntry", label: METRIC_LABELS.opponentTenpaiEntry, color: "#58733a", width: 1.8 },
       { key: "initialDoraOpponent", label: METRIC_LABELS.initialDoraOpponent, color: "#3d7764", width: 1.8 },
-      { key: "outcomeLuck", label: METRIC_LABELS.outcomeLuck, color: "#c03d55", width: 2.2 },
-      { key: "tsumoLuck", label: METRIC_LABELS.tsumoLuck, color: "#df6650", width: 1.8 },
-      { key: "ronLuck", label: METRIC_LABELS.ronLuck, color: "#e68b42", width: 1.8 },
-      { key: "dealInAvoidLuck", label: METRIC_LABELS.dealInAvoidLuck, color: "#7f557d", width: 1.8 },
-      { key: "otherWinAvoidLuck", label: METRIC_LABELS.otherWinAvoidLuck, color: "#6b728e", width: 1.8 },
-      { key: "chancePoints", label: METRIC_LABELS.chancePoints, color: "#a7286a", width: 2.2 }
+      { key: "otherWinAvoidLuck", label: METRIC_LABELS.otherWinAvoidLuck, color: "#6b728e", width: 1.8 }
     ];
     for (const item of series) {
       const chip = document.createElement("label");
@@ -723,12 +730,13 @@
       const valid = points.map((point, index) => ({ point, index, value: point[item.key] })).filter((entry) => Number.isFinite(entry.value));
       if (!valid.length) continue;
       const path = valid.map((entry, index) => `${index ? "L" : "M"}${xFor(entry.index).toFixed(1)},${yFor(entry.value).toFixed(1)}`).join(" ");
-      elements.trendChart.append(svgElement("path", { d: path, fill: "none", stroke: item.color, "stroke-width": item.width, class: "trend-line" }));
+      elements.trendChart.append(svgElement("path", { d: path, fill: "none", stroke: item.color, "stroke-width": item.width, "stroke-dasharray": item.dash || "", class: "trend-line" }));
       for (const entry of valid) {
         const circle = svgElement("circle", { cx: xFor(entry.index), cy: yFor(entry.value), r: item.key === "overall" ? 3.2 : 2.2, fill: item.color });
         const date = new Date(entry.point.date).toLocaleDateString("ja-JP");
-        const rank = entry.point.actualRank ? ` · ${entry.point.actualRank}着` : "";
-        circle.append(svgElement("title", {}, `${date} · ${entry.point.title} ${entry.point.roundLabel}${rank} · ${item.label} U=${formatLuck(entry.value)}`));
+        const rank = entry.point.actualRank && item.key !== "actualRankPlot" ? ` · ${entry.point.actualRank}着` : "";
+        const valueLabel = item.key === "actualRankPlot" ? `${entry.point.actualRank}着` : `U=${formatLuck(entry.value)}`;
+        circle.append(svgElement("title", {}, `${date} · ${entry.point.title} ${entry.point.roundLabel}${rank} · ${item.label} ${valueLabel}`));
         elements.trendChart.append(circle);
       }
     }
