@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f1917">
-  <meta name="description" content="BigCoachの解析JSONから、自分と他家の技術に依存しにくい19の運量と牌山の偏りを端末内だけで検証します。">
+  <meta name="description" content="BigCoachの解析JSONから、自分と他家の技術に依存しにくい27の運量と牌山の偏りを端末内だけで検証します。">
   <title>BigCoach Luck Analyzer</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -127,7 +127,7 @@
       <div id="empty-state" class="empty-state">
         <span>◌</span>
         <h3>まだ解析データがありません</h3>
-        <p>上の取り込み欄からJSONを追加すると、自分と他家の19の運量と独立性検定がここに表示されます。</p>
+        <p>上の取り込み欄からJSONを追加すると、自分と他家の27の運量と独立性検定がここに表示されます。</p>
       </div>
 
       <div id="metrics" class="metrics" hidden>
@@ -298,6 +298,70 @@
           <p id="ura-opponent-detail" class="metric-detail"></p>
           <p class="metric-note">他家のリーチ和了時に裏ドラが期待より少なかったほど、自分にとって幸運として評価します。</p>
         </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>20</span><h3>2シャンテン時有効牌ツモ率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="effective-2-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="effective-2-marker"></b></div>
+          <p id="effective-2-detail" class="metric-detail"></p>
+          <p class="metric-note">自摸直前が2シャンテンの機会だけを抽出し、向聴数を1つ以上下げる残り牌の理論確率と実績を比較します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>21</span><h3>1シャンテン時有効牌ツモ率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="effective-1-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="effective-1-marker"></b></div>
+          <p id="effective-1-detail" class="metric-detail"></p>
+          <p class="metric-note">自摸直前が1シャンテンの機会だけを抽出。テンパイ到達ツモと同じ抽選を、独立した見やすい指標として表示します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>22</span><h3>局結果総合上振れ</h3><i>BigCoach×経験分布</i></div>
+          <div class="metric-value"><strong id="outcome-luck-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="outcome-luck-meter"></span></div>
+          <p id="outcome-luck-detail" class="metric-detail"></p>
+          <p class="metric-note">局開始時の「自摸和了・ロン和了・放銃・他家決着・流局」予測に対する実現結果の標準化残差。BigCoachが完全に正しいとは置かず、対局ごとの残差を経験分布で順位化します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>23</span><h3>ツモ和了上振れ</h3><i>BigCoach×経験分布</i></div>
+          <div class="metric-value"><strong id="tsumo-luck-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="tsumo-luck-meter"></span></div>
+          <p id="tsumo-luck-detail" class="metric-detail"></p>
+          <p class="metric-note">局開始時の自摸和了確率に対して、実際の自摸和了が多かったかを経験分布で評価します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>24</span><h3>ロン和了上振れ</h3><i>BigCoach×経験分布</i></div>
+          <div class="metric-value"><strong id="ron-luck-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="ron-luck-meter"></span></div>
+          <p id="ron-luck-detail" class="metric-detail"></p>
+          <p class="metric-note">局開始時のロン和了確率に対して、実際のロン和了が多かったかを経験分布で評価します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>25</span><h3>放銃回避上振れ</h3><i>BigCoach×経験分布</i></div>
+          <div class="metric-value"><strong id="dealin-avoid-luck-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="dealin-avoid-luck-meter"></span></div>
+          <p id="dealin-avoid-luck-detail" class="metric-detail"></p>
+          <p class="metric-note">局開始時の放銃確率より実際の放銃が少なかったほど上振れ。打牌ごとの放銃予実幅とは別の局結果指標です。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>26</span><h3>他家決着回避上振れ</h3><i>BigCoach×経験分布</i></div>
+          <div class="metric-value"><strong id="otherwin-avoid-luck-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="otherwin-avoid-luck-meter"></span></div>
+          <p id="otherwin-avoid-luck-detail" class="metric-detail"></p>
+          <p class="metric-note">自分が関与しない他家同士の和了が予測より少なかったかを評価。自分の選択が比較的入りにくい結果です。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>27</span><h3>確率決着収支</h3><i>経験分布</i></div>
+          <div class="metric-value"><strong id="chance-points-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="meter"><span id="chance-points-meter"></span></div>
+          <p id="chance-points-detail" class="metric-detail"></p>
+          <p class="metric-note">自摸和了と、リーチ受理後の強制打牌によるロンだけの点棒収支。通常の選択可能な打牌によるロンは除外します。対局後の運の影響度であり、対局開始前の順位予測ではありません。</p>
+        </article>
       </div>
     </section>
 
@@ -318,7 +382,7 @@
       </div>
       <div id="trend-legend" class="trend-legend"></div>
       <div class="trend-chart-wrap">
-        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と19指標の局別推移"></svg>
+        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と27指標の局別推移"></svg>
       </div>
       <p class="trend-note">各点はその局単体の幸運度です。チェックを外すと系列を隠せます。値がない指標は対象機会がありません。</p>
     </section>
