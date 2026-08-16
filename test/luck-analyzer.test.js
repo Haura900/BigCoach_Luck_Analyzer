@@ -112,6 +112,31 @@ test("同じ元牌譜はモデル確率が変わってもgameIdが同じ", () =>
   assert.notEqual(first.id, second.id);
 });
 
+test("rankDeal falls back to round-start scores when game_info.rank is absent", () => {
+  const payload = {
+    player_id: 0,
+    mjai_log: [
+      { type: "start_kyoku", scores: [20000, 35000, 25000, 30000], tehais: [[], [], [], []] },
+      { type: "end_kyoku" }
+    ],
+    review: {
+      kyokus: [{
+        kyoku: 0,
+        entries: [{
+          actual: { type: "dahai", actor: 0, pai: "1m" },
+          sl_placement: [0.1, 0.2, 0.3, 0.4]
+        }],
+        end_status: []
+      }]
+    }
+  };
+  const round = analyzePayload(payload).rounds[0];
+  assert.equal(round.deal, null);
+  assert.equal(round.rankDeal.current, 4);
+  assert.ok(Math.abs(round.rankDeal.expected - 3) < 1e-12);
+  assert.ok(Math.abs(round.rankDeal.value - 1) < 1e-12);
+});
+
 test("メタデータだけのresultは解析JSONとして拒否する", () => {
   assert.throws(() => analyzePayload({ success: true, data: { jsonUrl: "/x" } }), /review\.kyokus/);
 });

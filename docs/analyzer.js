@@ -11,7 +11,7 @@
   if (!core) throw new Error("MahjongLuckCore is required");
 
   const VERSION = 2;
-  const CALCULATION_VERSION = 8;
+  const CALCULATION_VERSION = 9;
   const EXPERIENCE_MIN_POOL = 30;
   const DEFENSE_MIN_POOL = 30;
   const THEORY_MIN_N = 20;
@@ -173,6 +173,19 @@
     }
     if (current?.length) rounds.push(current);
     return rounds;
+  }
+
+  function rankFromScores(scores, hero) {
+    if (!Array.isArray(scores) || scores.length < 4 || !Number.isInteger(hero) || hero < 0 || hero >= scores.length) return null;
+    const normalized = scores.map(Number);
+    if (normalized.some((score) => !Number.isFinite(score))) return null;
+    const heroScore = normalized[hero];
+    return 1 + normalized.filter((score, index) => score > heroScore || (score === heroScore && index < hero)).length;
+  }
+
+  function roundStartRank(events, hero) {
+    const start = (events || []).find((event) => event?.type === "start_kyoku");
+    return rankFromScores(start?.scores, hero);
   }
 
   function inferRedTotals(data) {
@@ -623,10 +636,13 @@
       const entries = Array.isArray(kyoku.entries) ? kyoku.entries : [];
       const firstEntry = entries.find((entry) => winProbability(entry) != null) || null;
       const outcomeEntry = entries.find((entry) => outcomeProbabilities(entry) != null) || null;
+      const placementEntry = entries.find((entry) => placementProbabilities(entry) != null) || null;
       const dealP = firstEntry ? winProbability(firstEntry) : null;
-      const placement = firstEntry ? placementProbabilities(firstEntry) : null;
-      const info = firstEntry ? parseGameInfo(firstEntry) : {};
-      const currentRank = Number(info?.rank);
+      const placement = placementEntry ? placementProbabilities(placementEntry) : null;
+      const info = placementEntry ? parseGameInfo(placementEntry) : firstEntry ? parseGameInfo(firstEntry) : {};
+      const parsedInfoRank = info?.rank == null ? null : Number(info.rank);
+      const infoRank = Number.isInteger(parsedInfoRank) && parsedInfoRank >= 1 && parsedInfoRank <= 4 ? parsedInfoRank : null;
+      const currentRank = infoRank ?? roundStartRank(mjaiRounds[index], hero);
       const expectedRank = placement ? placement.reduce((sum, p, rank) => sum + p * (rank + 1), 0) : null;
       const theory = analyzeMjaiRound(mjaiRounds[index], hero, redTotals, {
         gameId,
