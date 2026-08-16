@@ -11,11 +11,13 @@
   if (!core) throw new Error("MahjongLuckCore is required");
 
   const VERSION = 2;
+  const CALCULATION_VERSION = 4;
   const EXPERIENCE_MIN_POOL = 30;
   const DEFENSE_MIN_POOL = 30;
   const THEORY_MIN_N = 20;
   const RIICHI_MIN_N = 10;
   const SEAT_NAMES = ["東家", "南家", "西家", "北家"];
+  const METRIC_KEYS = ["deal", "rankDeal", "defense", "dora", "effective", "genbutsu", "riichiWin", "riichiDealIn"];
 
   function clampProbability(value) {
     const numeric = Number(value);
@@ -24,8 +26,12 @@
     return Math.min(1, Math.max(0, normalized));
   }
 
+  function finiteNumbers(values) {
+    return (values || []).filter((value) => value != null && value !== "").map(Number).filter(Number.isFinite);
+  }
+
   function mean(values) {
-    const valid = (values || []).map(Number).filter(Number.isFinite);
+    const valid = finiteNumbers(values);
     return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null;
   }
 
@@ -273,11 +279,15 @@
             const opponentWaits = new Set();
             for (let player = 0; player < playerCount; player += 1) {
               if (player === hero || core.shanten(hands[player], openMelds[player]) !== 0) continue;
-              for (const id of core.winningTiles(hands[player], openMelds[player])) opponentWaits.add(id);
+              const waits = core.winningTiles(hands[player], openMelds[player]);
+              if (waits.some((id) => discards[player].has(id))) continue;
+              for (const id of waits) opponentWaits.add(id);
             }
             for (const id of ownWaits) opponentWaits.delete(id);
             const ids = [...opponentWaits];
-            result.riichiDealIn.push(exposure(countIds(state.remaining, ids) / state.total, ids.includes(actualId) ? 1 : 0, { opponentsTenpai: ids.length > 0 }));
+            if (ids.length) {
+              result.riichiDealIn.push(exposure(countIds(state.remaining, ids) / state.total, ids.includes(actualId) ? 1 : 0, { opponentsTenpai: true }));
+            }
           }
         } else if (state.total > 0 && actor !== hero && acceptedRiichi.has(hero) && acceptedRiichi.has(actor)) {
           const ownWaits = core.winningTiles(hands[hero], openMelds[hero]);
@@ -345,6 +355,21 @@
     return result;
   }
 
+  function finalPlacement(data, hero) {
+    let scores = null;
+    for (const event of Array.isArray(data?.mjai_log) ? data.mjai_log : []) {
+      if (event?.type === "start_kyoku" && Array.isArray(event.scores)) {
+        scores = event.scores.map(Number);
+      } else if (scores && Array.isArray(event?.deltas) && event.deltas.length === scores.length) {
+        scores = scores.map((score, index) => score + Number(event.deltas[index] || 0));
+      }
+    }
+    if (!scores || !Number.isFinite(scores[hero])) return { actualRank: null, finalScore: null };
+    const heroScore = scores[hero];
+    const actualRank = 1 + scores.filter((score, index) => score > heroScore || (score === heroScore && index < hero)).length;
+    return { actualRank, finalScore: heroScore };
+  }
+
   function analyzePayload(payload, meta = {}) {
     const data = unwrapPayload(payload);
     const kyokus = Array.isArray(data.review?.kyokus) ? data.review.kyokus : [];
@@ -392,10 +417,13 @@
       : Array.isArray(data.split_logs?.[0]?.name) ? data.split_logs[0].name : [];
     const players = rawNames.slice(0, 4).map((name) => String(name || "").trim());
     const heroName = String(meta.playerName || players[hero] || "").trim();
+    const placement = finalPlacement(data, hero);
     return {
       schemaVersion: VERSION,
+      calculationVersion: CALCULATION_VERSION,
       id: `bc-${hashText(signature)}`,
       gameId,
+      taskId: String(meta.taskId || ""),
       sourceUrl: meta.sourceUrl || "",
       title: meta.title || `BigCoach解析 ${kyokus.length}局`,
       importedAt: meta.importedAt || new Date().toISOString(),
@@ -404,6 +432,8 @@
       platform: String(meta.platform || ""),
       table: String(meta.table || data.split_logs?.[0]?.rule?.disp || ""),
       heroName,
+      actualRank: placement.actualRank,
+      finalScore: placement.finalScore,
       players,
       opponents: players.filter((name, index) => index !== hero && name),
       rounds
@@ -411,10 +441,11 @@
   }
 
   function empiricalPercentile(value, pool) {
-    const valid = (pool || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-    if (!Number.isFinite(Number(value)) || !valid.length) return null;
-    const lower = valid.filter((item) => item < value).length;
-    const equal = valid.filter((item) => item === value).length;
+    const valid = finiteNumbers(pool).sort((a, b) => a - b);
+    if (value == null || value === "" || !Number.isFinite(Number(value)) || !valid.length) return null;
+    const numeric = Number(value);
+    const lower = valid.filter((item) => item < numeric).length;
+    const equal = valid.filter((item) => item === numeric).length;
     return ((lower + equal * 0.5) / valid.length) * 100;
   }
 
@@ -434,8 +465,8 @@
   }
 
   function bootstrapPercentile(subject, pool, seed = "bootstrap") {
-    const values = (subject || []).map(Number).filter(Number.isFinite);
-    const reference = (pool || []).map(Number).filter(Number.isFinite);
+    const values = finiteNumbers(subject);
+    const reference = finiteNumbers(pool);
     if (!values.length || !reference.length) return null;
     const observed = mean(values);
     const random = seededRandom(`${seed}:${values.length}:${reference.length}`);
@@ -468,6 +499,7 @@
     const variance = valid.reduce((sum, event) => sum + Number(event.p) * (1 - Number(event.p)), 0);
     const rawZ = variance > 0 ? (observed - expected) / Math.sqrt(variance) : null;
     const luckZ = rawZ == null ? null : rawZ * luckyDirection;
+    const u = luckZ == null ? null : normalCdf(luckZ);
     return {
       n: valid.length,
       observed,
@@ -475,19 +507,134 @@
       variance,
       rawZ,
       luckZ,
-      percentile: luckZ == null ? null : normalCdf(luckZ) * 100,
+      u,
+      percentile: u == null ? null : u * 100,
       pValue: rawZ == null ? null : Math.min(1, 2 * (1 - normalCdf(Math.abs(rawZ))))
     };
   }
 
+  function pearson(left, right) {
+    const pairs = (left || []).map((value, index) => [Number(value), Number(right?.[index])])
+      .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+    if (pairs.length < 3) return null;
+    const leftMean = mean(pairs.map(([x]) => x));
+    const rightMean = mean(pairs.map(([, y]) => y));
+    const numerator = pairs.reduce((sum, [x, y]) => sum + (x - leftMean) * (y - rightMean), 0);
+    const leftVariance = pairs.reduce((sum, [x]) => sum + Math.pow(x - leftMean, 2), 0);
+    const rightVariance = pairs.reduce((sum, [, y]) => sum + Math.pow(y - rightMean, 2), 0);
+    return leftVariance > 0 && rightVariance > 0 ? numerator / Math.sqrt(leftVariance * rightVariance) : null;
+  }
+
+  function scoreUnits(units) {
+    const raw = units.map((unit) => {
+      const rounds = unit.rounds || [];
+      return {
+        deal: mean(rounds.map((round) => round.deal?.value)),
+        rankDeal: mean(rounds.map((round) => round.rankDeal?.value)),
+        defense: mean(rounds.map(defenseRoundValue)),
+        dora: martingale(rounds.flatMap((round) => round.dora || []), 1).percentile,
+        effective: martingale(rounds.flatMap((round) => round.effective || []), 1).percentile,
+        genbutsu: martingale(rounds.flatMap((round) => round.genbutsu || []), 1).percentile,
+        riichiWin: martingale(rounds.flatMap((round) => round.riichiWin || []), 1).percentile,
+        riichiDealIn: martingale(rounds.flatMap((round) => round.riichiDealIn || []), -1).percentile
+      };
+    });
+    const pools = Object.fromEntries(["deal", "rankDeal", "defense"].map((key) => [key, raw.map((row) => row[key]).filter(Number.isFinite)]));
+    return units.map((unit, index) => {
+      const { rounds, ...meta } = unit;
+      return {
+        ...meta,
+        scores: {
+        ...raw[index],
+        deal: empiricalPercentile(raw[index].deal, pools.deal),
+        rankDeal: empiricalPercentile(raw[index].rankDeal, pools.rankDeal),
+        defense: empiricalPercentile(raw[index].defense, pools.defense)
+        }
+      };
+    });
+  }
+
+  function recordMetricScores(records) {
+    const units = (Array.isArray(records) ? records : []).map((record) => ({
+      id: record.id,
+      importedAt: record.importedAt,
+      title: record.title,
+      actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) ? Number(record.actualRank) : null,
+      rounds: record.rounds || []
+    }));
+    return scoreUnits(units);
+  }
+
+  function roundMetricScores(records) {
+    const units = (Array.isArray(records) ? records : []).flatMap((record) => (record.rounds || []).map((round, index) => ({
+      id: `${record.id}:${index}`,
+      recordId: record.id,
+      importedAt: record.importedAt,
+      title: record.title,
+      roundLabel: round.label || `第${index + 1}局`,
+      actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) ? Number(record.actualRank) : null,
+      rounds: [round]
+    })));
+    return scoreUnits(units);
+  }
+
+  function fitOutcomeWeights(records) {
+    const rows = recordMetricScores(records).filter((row) => Number.isInteger(row.actualRank) && row.actualRank >= 1 && row.actualRank <= 4);
+    const equalWeights = Object.fromEntries(METRIC_KEYS.map((key) => [key, 1 / METRIC_KEYS.length]));
+    if (rows.length < 20) return { weights: equalWeights, correlation: null, sampleN: rows.length, fitted: false };
+
+    const columns = METRIC_KEYS.map((key) => rows.map((row) => Number.isFinite(row.scores[key]) ? row.scores[key] : 50));
+    const scales = [];
+    const standardized = columns.map((values) => {
+      const center = mean(values);
+      const variance = mean(values.map((value) => Math.pow(value - center, 2)));
+      const scale = variance > 0 ? Math.sqrt(variance) : 1;
+      scales.push(scale);
+      return values.map((value) => (value - center) / scale);
+    });
+    const outcome = rows.map((row) => 5 - row.actualRank);
+    const outcomeMean = mean(outcome);
+    const centeredOutcome = outcome.map((value) => value - outcomeMean);
+    const beta = Array(METRIC_KEYS.length).fill(0);
+
+    for (let iteration = 0; iteration < 500; iteration += 1) {
+      let movement = 0;
+      for (let feature = 0; feature < METRIC_KEYS.length; feature += 1) {
+        let numerator = 0;
+        let denominator = 0;
+        for (let row = 0; row < rows.length; row += 1) {
+          let residual = centeredOutcome[row];
+          for (let other = 0; other < METRIC_KEYS.length; other += 1) {
+            if (other !== feature) residual -= standardized[other][row] * beta[other];
+          }
+          numerator += standardized[feature][row] * residual;
+          denominator += standardized[feature][row] * standardized[feature][row];
+        }
+        const next = denominator > 0 ? Math.max(0, numerator / denominator) : 0;
+        movement = Math.max(movement, Math.abs(next - beta[feature]));
+        beta[feature] = next;
+      }
+      if (movement < 1e-10) break;
+    }
+
+    const rawBeta = beta.map((value, index) => value / scales[index]);
+    const total = rawBeta.reduce((sum, value) => sum + value, 0);
+    const weights = total > 0
+      ? Object.fromEntries(METRIC_KEYS.map((key, index) => [key, rawBeta[index] / total]))
+      : equalWeights;
+    const prediction = rows.map((row) => METRIC_KEYS.reduce((sum, key) => sum + (Number.isFinite(row.scores[key]) ? row.scores[key] : 50) * weights[key], 0));
+    return { weights, correlation: pearson(prediction, outcome), sampleN: rows.length, fitted: total > 0 };
+  }
+
   function empiricalMetric(subjectValues, poolValues, minPool, seed) {
-    const values = (subjectValues || []).map(Number).filter(Number.isFinite);
-    const pool = (poolValues || []).map(Number).filter(Number.isFinite);
+    const values = finiteNumbers(subjectValues);
+    const pool = finiteNumbers(poolValues);
     const percentile = bootstrapPercentile(values, pool, seed);
     return {
       n: values.length,
       poolN: pool.length,
       value: mean(values),
+      u: percentile == null ? null : percentile / 100,
       percentile,
       pValue: percentile == null ? null : Math.min(1, 2 * Math.min(percentile / 100, 1 - percentile / 100)),
       included: values.length > 0 && pool.length >= minPool,
@@ -655,7 +802,7 @@
       { key: "effective", label: "有効牌ツモ", score: effective.percentile, included: effective.n >= THEORY_MIN_N, reason: `対象 ${effective.n}/${THEORY_MIN_N}ツモ` },
       { key: "genbutsu", label: "被リーチ時現物", score: genbutsu.percentile, included: genbutsu.n >= RIICHI_MIN_N, reason: `対象 ${genbutsu.n}/${RIICHI_MIN_N}ツモ` },
       { key: "riichiWin", label: "リーチ時自明和了", score: riichiWin.percentile, included: riichiWin.n >= RIICHI_MIN_N, reason: `対象 ${riichiWin.n}/${RIICHI_MIN_N}機会` },
-      { key: "riichiDealIn", label: "リーチ時危険牌", score: riichiDealIn.percentile, included: riichiDealIn.n >= RIICHI_MIN_N, reason: `対象 ${riichiDealIn.n}/${RIICHI_MIN_N}ツモ` }
+      { key: "riichiDealIn", label: "リーチ後危険牌回避", score: riichiDealIn.percentile, included: riichiDealIn.n >= RIICHI_MIN_N, reason: `対象 ${riichiDealIn.n}/${RIICHI_MIN_N}ツモ` }
     ];
     const component = Object.fromEntries(individual.map((item) => [item.key, item]));
     const families = [
@@ -667,8 +814,12 @@
       const included = family.items.filter((item) => item.included && Number.isFinite(item.score));
       return { ...family, included: included.length > 0, score: mean(included.map((item) => item.score)) };
     });
-    const includedFamilies = families.filter((family) => family.included);
-    const overallScore = mean(includedFamilies.map((family) => family.score));
+    const outcomeModel = fitOutcomeWeights(allRecords);
+    const hasScore = individual.some((item) => item.included && Number.isFinite(item.score));
+    const weightTotal = individual.reduce((sum, item) => sum + Number(outcomeModel.weights[item.key] || 0), 0);
+    const overallScore = hasScore && weightTotal > 0
+      ? individual.reduce((sum, item) => sum + (item.included && Number.isFinite(item.score) ? item.score : 50) * Number(outcomeModel.weights[item.key] || 0), 0) / weightTotal
+      : null;
 
     const effectiveRoundRows = roundRows(selected, (round) => martingale(round.effective || [], 1).luckZ);
     const seatTest = seatPermutationTest(effectiveRoundRows);
@@ -688,7 +839,7 @@
       { key: "effectiveCalibration", label: "有効牌：理論値との一致", pValue: effective.n >= THEORY_MIN_N ? effective.pValue : null, n: effective.n, method: "逐次確率残差" },
       { key: "genbutsuCalibration", label: "被リーチ時現物：理論値との一致", pValue: genbutsu.n >= RIICHI_MIN_N ? genbutsu.pValue : null, n: genbutsu.n, method: "逐次確率残差" },
       { key: "riichiWinCalibration", label: "リーチ和了牌：理論値との一致", pValue: riichiWin.n >= RIICHI_MIN_N ? riichiWin.pValue : null, n: riichiWin.n, method: "逐次確率残差" },
-      { key: "riichiDangerCalibration", label: "リーチ危険牌：理論値との一致", pValue: riichiDealIn.n >= RIICHI_MIN_N ? riichiDealIn.pValue : null, n: riichiDealIn.n, method: "逐次確率残差" },
+      { key: "riichiDangerCalibration", label: "リーチ後危険牌：理論値との一致", pValue: riichiDealIn.n >= RIICHI_MIN_N ? riichiDealIn.pValue : null, n: riichiDealIn.n, method: "逐次確率残差" },
       { key: "seat", label: "有効牌残差 × 親からの席順", pValue: seatTest.pValue, n: seatTest.n, method: "半荘内置換検定" },
       { key: "serial", label: "有効牌残差の局間連続性", pValue: serialTest.pValue, n: serialTest.n, method: "半荘内順序置換" }
     ];
@@ -728,7 +879,12 @@
       riichiDealIn,
       overall: {
         score: overallScore,
+        u: overallScore == null ? null : overallScore / 100,
         families,
+        weights: outcomeModel.weights,
+        correlation: outcomeModel.correlation,
+        correlationN: outcomeModel.sampleN,
+        fittedWeights: outcomeModel.fitted,
         included: individual.filter((item) => item.included),
         excluded: individual.filter((item) => !item.included),
         totalComponents: individual.length
@@ -760,6 +916,7 @@
 
   return {
     VERSION,
+    CALCULATION_VERSION,
     EXPERIENCE_MIN_POOL,
     DEFENSE_MIN_POOL,
     THEORY_MIN_N,
@@ -771,6 +928,9 @@
     empiricalPercentile,
     bootstrapPercentile,
     cauchyCombine,
+    recordMetricScores,
+    roundMetricScores,
+    fitOutcomeWeights,
     normalCdf,
     unwrapPayload,
     extractEmbeddedJson,

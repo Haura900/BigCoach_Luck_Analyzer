@@ -4,13 +4,28 @@
   const STORAGE_KEY = "bigcoach-luck-analyzer:v2";
   const PLAYER_NAME_KEY = "bigcoach-luck-player-name";
   const DATABASE_NAME = "bigcoach-luck-analyzer";
-  const DATABASE_VERSION = 1;
+  const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
+  const CACHE_STORE = "analysis-cache";
+  const CACHE_VERSION = 4;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
+  const summaryCache = new Map();
   let selectedId = null;
   let scope = "all";
+  let trendLimit = "50";
+  const trendVisible = new Set(["overall", "deal", "rankDeal", "defense", "dora", "effective", "riichiWin", "riichiDealIn", "genbutsu"]);
+  const METRIC_LABELS = {
+    deal: "配牌時和了率",
+    rankDeal: "配牌時平着変動",
+    defense: "放銃予実幅",
+    dora: "ドラツモ率",
+    effective: "有効牌ツモ率",
+    riichiWin: "リーチ時自明和了率",
+    riichiDealIn: "リーチ後危険牌回避度",
+    genbutsu: "被リーチ時現物掴み率"
+  };
 
   const elements = {
     tabs: [...document.querySelectorAll(".tab")],
@@ -29,11 +44,14 @@
     metrics: document.querySelector("#metrics"),
     history: document.querySelector("#history-list"),
     export: document.querySelector("#export-button"),
+    dashboardControls: document.querySelector("#dashboard-controls"),
     scopeSwitch: document.querySelector("#scope-switch"),
     scopeButtons: [...document.querySelectorAll("#scope-switch button")],
+    recordSelect: document.querySelector("#record-select"),
     trendSection: document.querySelector("#trend-section"),
     trendChart: document.querySelector("#trend-chart"),
-    trendLegend: document.querySelector("#trend-legend")
+    trendLegend: document.querySelector("#trend-legend"),
+    trendLimit: document.querySelector("#trend-limit")
   };
 
   const DEMO_DATA = {
@@ -87,6 +105,7 @@
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains(RECORD_STORE)) database.createObjectStore(RECORD_STORE, { keyPath: "id" });
+        if (!database.objectStoreNames.contains(CACHE_STORE)) database.createObjectStore(CACHE_STORE, { keyPath: "key" });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error("IndexedDBを開けませんでした。"));
@@ -101,15 +120,21 @@
   function compactRecord(record) {
     return {
       schemaVersion: record.schemaVersion,
+      calculationVersion: Number(record.calculationVersion || 0),
       id: record.id,
       gameId: record.gameId,
+      taskId: String(record.taskId || ""),
       title: record.title,
       importedAt: record.importedAt,
       gameLength: record.gameLength || "",
       platform: record.platform || "",
       table: record.table || "",
       opponents: Array.isArray(record.opponents) ? record.opponents.slice(0, 3) : [],
+      actualRank: record.actualRank != null && Number.isInteger(Number(record.actualRank)) && Number(record.actualRank) >= 1 && Number(record.actualRank) <= 4 ? Number(record.actualRank) : null,
+      finalScore: record.finalScore != null && Number.isFinite(Number(record.finalScore)) ? Number(record.finalScore) : null,
       rounds: (record.rounds || []).map((round) => ({
+        label: String(round.label || ""),
+        index: round.index != null && Number.isInteger(Number(round.index)) ? Number(round.index) : null,
         seat: round.seat,
         deal: round.deal ? { value: Number(round.deal.value) } : null,
         rankDeal: round.rankDeal ? { value: Number(round.rankDeal.value) } : null,
@@ -153,9 +178,10 @@
   async function saveRecords(nextRecords = records) {
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
-      const transaction = database.transaction(RECORD_STORE, "readwrite");
+      const transaction = database.transaction([RECORD_STORE, CACHE_STORE], "readwrite");
       const store = transaction.objectStore(RECORD_STORE);
       store.clear();
+      transaction.objectStore(CACHE_STORE).clear();
       nextRecords.forEach((record, position) => {
         const compact = compactRecord(record);
         store.put({ id: compact.id, position, record: compact });
@@ -164,7 +190,46 @@
       transaction.onerror = () => reject(transaction.error || new Error("履歴を保存できませんでした。"));
       transaction.onabort = () => reject(transaction.error || new Error("履歴の保存が中断されました。"));
     });
+    summaryCache.clear();
     localStorage.removeItem(STORAGE_KEY);
+  }
+
+  function hashText(text) {
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function summaryCacheKey(subjectId = null) {
+    const signature = records.map((record) => `${record.id}:${record.actualRank || ""}`).join("|");
+    return `${CACHE_VERSION}:${hashText(signature)}:${records.length}:${subjectId || "all"}`;
+  }
+
+  async function loadSummaryCache() {
+    const database = await openDatabase();
+    const stored = await new Promise((resolve, reject) => {
+      const request = database.transaction(CACHE_STORE, "readonly").objectStore(CACHE_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    stored.filter((entry) => entry?.key && entry?.summary).forEach((entry) => summaryCache.set(entry.key, entry.summary));
+  }
+
+  function getSummary(subjectId = null) {
+    const key = summaryCacheKey(subjectId);
+    if (summaryCache.has(key)) return summaryCache.get(key);
+    const summary = analyzer.summarize(records, subjectId);
+    summaryCache.set(key, summary);
+    openDatabase().then((database) => new Promise((resolve, reject) => {
+      const transaction = database.transaction(CACHE_STORE, "readwrite");
+      transaction.objectStore(CACHE_STORE).put({ key, summary });
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    })).catch(() => { /* the in-memory cache remains usable */ });
+    return summary;
   }
 
   function setStatus(message, type = "") {
@@ -191,9 +256,10 @@
       (record.gameId && item.gameId === record.gameId) || item.id === record.id
     );
     if (existing >= 0) {
-      selectedId = records[existing].id;
+      records[existing] = record;
+      selectedId = record.id;
       scope = "selected";
-      setStatus("同じ対局はすでに保存済みのため、重複登録を除外しました。", "success");
+      setStatus("同じ対局を最新の計算結果で更新しました。", "success");
     } else {
       records.unshift(record);
       selectedId = record.id;
@@ -209,12 +275,20 @@
     const incoming = Array.isArray(bundle?.items) ? bundle.items : [];
     if (!incoming.length) throw new Error("一括取得ファイルに解析可能な牌譜がありません。");
     const added = [];
+    let updated = 0;
     let duplicates = 0;
     let failed = 0;
     for (let index = 0; index < incoming.length; index += 1) {
       const item = incoming[index];
       try {
+        const savedByTask = item?.taskId && records.find((saved) => saved.taskId === String(item.taskId));
+        if (savedByTask?.calculationVersion === analyzer.CALCULATION_VERSION) {
+          duplicates += 1;
+          if (item && typeof item === "object") item.data = null;
+          continue;
+        }
         const record = compactRecord(analyzer.analyzePayload(item.data || item, {
+          taskId: item.taskId || "",
           sourceUrl: item.sourceUrl || "",
           title: item.title || (item.taskId ? `BigCoach ${String(item.taskId).slice(0, 8)}` : "BigCoach解析"),
           importedAt: item.submittedAt || bundle.exportedAt,
@@ -222,11 +296,20 @@
           platform: item.platform || "",
           table: item.table || ""
         }));
-        const exists = [...records, ...added].some((saved) =>
+        const existing = records.findIndex((saved) =>
           (record.gameId && saved.gameId === record.gameId) || saved.id === record.id
         );
-        if (exists) duplicates += 1;
-        else added.push(record);
+        const pending = added.findIndex((saved) =>
+          (record.gameId && saved.gameId === record.gameId) || saved.id === record.id
+        );
+        if (existing >= 0) {
+          records[existing] = record;
+          updated += 1;
+        } else if (pending >= 0) {
+          added[pending] = record;
+        } else {
+          added.push(record);
+        }
       } catch {
         failed += 1;
       }
@@ -236,13 +319,17 @@
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
     }
-    records.unshift(...added);
-    selectedId = null;
-    scope = "all";
-    await saveRecords();
-    render();
+    if (added.length || updated) {
+      setStatus("集計キャッシュと着順相関モデルを更新中…", "loading");
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      records.unshift(...added);
+      selectedId = null;
+      scope = "all";
+      await saveRecords();
+      render();
+    }
     const remoteFailures = Number(bundle?.failures?.length || 0);
-    setStatus(`一括取込: ${added.length}対局を追加、${duplicates}件の重複を除外、${failed + remoteFailures}件を取得・解析できませんでした。`, added.length ? "success" : "error");
+    setStatus(`一括取込: ${added.length}対局を追加、${updated}対局を最新計算へ更新、${duplicates}対局は計算済みのため省略、${failed + remoteFailures}件を取得・解析できませんでした。`, added.length || updated || duplicates ? "success" : "error");
     document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -280,7 +367,7 @@
     try {
       const raw = elements.url.value.trim();
       const data = await fetchFromReviewUrl(raw);
-      await addPayload(data, { sourceUrl: raw, title: reviewTitle(raw) });
+      await addPayload(data, { taskId: parseReviewUrl(raw).taskId, sourceUrl: raw, title: reviewTitle(raw) });
     } catch (error) {
       const reason = error instanceof TypeError
         ? "BigCoachへの直接接続がブラウザに拒否されました。"
@@ -323,13 +410,17 @@
   }
 
   function formatNumber(value, digits = 1) {
-    return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
+    return value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
   }
 
   function signed(value, digits = 2) {
-    if (!Number.isFinite(Number(value))) return "—";
+    if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
     const numeric = Number(value);
     return `${numeric >= 0 ? "+" : "−"}${Math.abs(numeric).toFixed(digits)}`;
+  }
+
+  function formatLuck(score) {
+    return score != null && score !== "" && Number.isFinite(Number(score)) ? (Number(score) / 100).toFixed(3) : "—";
   }
 
   async function addProcessedRecords(incoming) {
@@ -338,9 +429,13 @@
       .map(compactRecord);
     if (!valid.length) throw new Error("この履歴は旧計算方式です。元のBigCoach JSONから再取り込みしてください。");
     let added = 0;
+    let updated = 0;
     for (const record of valid) {
-      const exists = records.some((saved) => (record.gameId && saved.gameId === record.gameId) || saved.id === record.id);
-      if (!exists) {
+      const existing = records.findIndex((saved) => (record.gameId && saved.gameId === record.gameId) || saved.id === record.id);
+      if (existing >= 0) {
+        records[existing] = record;
+        updated += 1;
+      } else {
         records.push(record);
         added += 1;
       }
@@ -349,11 +444,11 @@
     scope = "all";
     selectedId = null;
     render();
-    setStatus(`${added}対局の計算済み履歴を読み込みました。`, "success");
+    setStatus(`${added}対局を追加、${updated}対局を更新しました。`, "success");
   }
 
   function luckLabel(score) {
-    if (!Number.isFinite(Number(score))) return "データ不足";
+    if (score == null || score === "" || !Number.isFinite(Number(score))) return "データ不足";
     if (score >= 90) return "かなり上振れ";
     if (score >= 70) return "やや上振れ";
     if (score <= 10) return "かなり下振れ";
@@ -363,18 +458,20 @@
 
   function setExperienceMetric(prefix, result, formatter) {
     const score = result.percentile;
-    document.querySelector(`#${prefix}-percentile`).textContent = score == null ? "—" : formatNumber(score, 0);
+    document.querySelector(`#${prefix}-percentile`).textContent = formatLuck(score);
     document.querySelector(`#${prefix}-meter`).style.width = `${score || 0}%`;
     document.querySelector(`#${prefix}-detail`).textContent = result.n
-      ? `${luckLabel(score)} · ${formatter(result)} · 対象${result.n}局 / 経験分布${result.poolN}局${result.included ? "" : `（指数算入は${result.minimum}局から）`}`
+      ? `${luckLabel(score)} · ${formatter(result)} · U=${formatLuck(score)} / 両側p ${formatNumber(result.pValue, 3)} · 対象${result.n}局 / 経験分布${result.poolN}局${result.included ? "" : `（指数算入は${result.minimum}局から）`}`
       : "対象データがありません";
   }
 
   function setTheoryMetric(prefix, result, noun) {
     const score = result.percentile;
-    document.querySelector(`#${prefix}-percentile`).textContent = score == null ? "—" : formatNumber(score, 0);
+    const observedRate = result.n ? result.observed / result.n * 100 : null;
+    const expectedRate = result.n ? result.expected / result.n * 100 : null;
+    document.querySelector(`#${prefix}-percentile`).textContent = formatLuck(score);
     document.querySelector(`#${prefix}-detail`).textContent = result.n
-      ? `${luckLabel(score)} · 実績 ${formatNumber(result.observed, 0)} / 理論 ${formatNumber(result.expected, 2)} ${noun}（n=${result.n}）· 標準化差 ${signed(result.luckZ, 2)}`
+      ? `${luckLabel(score)} · 実率 ${formatNumber(observedRate, 2)}% / 理論率 ${formatNumber(expectedRate, 2)}% · 実績 ${formatNumber(result.observed, 0)} / 理論 ${formatNumber(result.expected, 2)} ${noun}（n=${result.n}）· z ${signed(result.luckZ, 2)} · U=${formatLuck(score)} / 両側p ${formatNumber(result.pValue, 3)}`
       : "MJAIイベントから計算できる対象機会がありません";
     const position = score == null ? 50 : Math.max(4, Math.min(96, score));
     document.querySelector(`#${prefix}-marker`).style.left = `${position}%`;
@@ -382,7 +479,7 @@
 
   function renderMetrics(summary) {
     const overall = summary.overall;
-    document.querySelector("#overall-score").textContent = overall.score == null ? "—" : formatNumber(overall.score, 0);
+    document.querySelector("#overall-score").textContent = formatLuck(overall.score);
     document.querySelector("#overall-label").textContent = overall.score == null
       ? "評価できる指標を蓄積中"
       : overall.score >= 90 ? "かなり運が良い"
@@ -391,10 +488,16 @@
             : overall.score <= 30 ? "やや運が悪い" : "おおむね標準的";
     document.querySelector("#overall-detail").textContent = overall.score == null
       ? "総合運に入れられる指標がまだありません。"
-      : `${overall.included.length}/${overall.totalComponents}指標、${overall.families.filter((family) => family.included).length}系統を合成。これは記述指数であり、p値やσではありません。`;
+      : `${overall.included.length}/${overall.totalComponents}指標のU[0,1]を、実着順との相関が最大になる非負の係数で加重。Uは上振れ方向の累積確率で、両側p値ではありません。`;
+    const weightText = Object.entries(overall.weights || {})
+      .map(([key, weight]) => `${METRIC_LABELS[key]} ${formatNumber(weight * 100, 1)}%`)
+      .join(" / ");
+    document.querySelector("#overall-model").textContent = overall.fittedWeights
+      ? `目的変数=5−着順、対象なしはU=0.5で補完する標準化非負回帰 · 学習内相関 r=${formatNumber(overall.correlation, 3)}（${overall.correlationN}対局）· 重み: ${weightText}`
+      : `実着順を保存した対局が不足しているため均等重みです（${overall.correlationN}/20対局）。既存履歴は元の差分JSONを再取り込みすると着順が補完されます。`;
     const overallComponents = document.querySelector("#overall-components");
     overallComponents.replaceChildren(
-      ...overall.included.map((component) => overallChip(`${component.label} ${formatNumber(component.score, 0)}`, false)),
+      ...overall.included.map((component) => overallChip(`${component.label} ${formatLuck(component.score)}`, false)),
       ...overall.excluded.map((component) => overallChip(`${component.label}: ${component.reason}`, true))
     );
     setExperienceMetric("deal", summary.deal, (result) => `平均和了予測 ${formatNumber(result.value * 100, 1)}%`);
@@ -450,6 +553,13 @@
     return element;
   }
 
+  function weightedRecordScore(scores, weights) {
+    const entries = Object.entries(weights || {}).filter(([, weight]) => Number(weight) > 0);
+    if (!entries.some(([key]) => Number.isFinite(scores?.[key]))) return null;
+    const total = entries.reduce((sum, [, weight]) => sum + Number(weight), 0);
+    return total > 0 ? entries.reduce((sum, [key, weight]) => sum + (Number.isFinite(scores?.[key]) ? scores[key] : 50) * Number(weight), 0) / total : null;
+  }
+
   function renderTrend() {
     elements.trendSection.hidden = records.length === 0;
     elements.trendChart.replaceChildren();
@@ -460,31 +570,42 @@
       .map((record, index) => ({ record, index, time: Date.parse(record.importedAt) || 0 }))
       .sort((left, right) => left.time - right.time || right.index - left.index)
       .map((item) => item.record);
-    const pointCount = Math.min(24, chronological.length);
-    const indices = [...new Set(Array.from({ length: pointCount }, (_, index) =>
-      pointCount === 1 ? chronological.length - 1 : Math.round(index * (chronological.length - 1) / (pointCount - 1))
-    ))];
-    const points = indices.map((recordIndex) => {
-      const summary = analyzer.summarize(chronological.slice(0, recordIndex + 1));
-      return {
-        recordIndex,
-        date: chronological[recordIndex]?.importedAt,
-        overall: summary.overall.score,
-        ...Object.fromEntries(summary.overall.families.map((family) => [family.key, family.included ? family.score : null]))
-      };
-    });
+    const model = analyzer.fitOutcomeWeights(chronological);
+    const allPoints = analyzer.roundMetricScores(chronological).map((row, roundIndex) => ({
+      roundIndex,
+      date: row.importedAt,
+      title: row.title,
+      roundLabel: row.roundLabel,
+      actualRank: row.actualRank,
+      ...row.scores,
+      overall: weightedRecordScore(row.scores, model.weights)
+    }));
+    const limit = trendLimit === "all" ? allPoints.length : Number(trendLimit);
+    const points = allPoints.slice(-Math.max(1, limit));
     const series = [
-      { key: "overall", label: "総合運", color: "#12614f", width: 4 },
-      { key: "initial", label: "配牌", color: "#d98d3b", width: 2 },
-      { key: "defense", label: "守備", color: "#b45145", width: 2 },
-      { key: "draw", label: "通常ツモ", color: "#287cb5", width: 2 },
-      { key: "riichi", label: "リーチ後", color: "#7656a8", width: 2 }
+      { key: "overall", label: "総合運", color: "#12614f", width: 3.5 },
+      { key: "deal", label: METRIC_LABELS.deal, color: "#d98d3b", width: 1.8 },
+      { key: "rankDeal", label: METRIC_LABELS.rankDeal, color: "#b66a2b", width: 1.8 },
+      { key: "defense", label: METRIC_LABELS.defense, color: "#b45145", width: 1.8 },
+      { key: "dora", label: METRIC_LABELS.dora, color: "#287cb5", width: 1.8 },
+      { key: "effective", label: METRIC_LABELS.effective, color: "#2d9aa0", width: 1.8 },
+      { key: "riichiWin", label: METRIC_LABELS.riichiWin, color: "#7656a8", width: 1.8 },
+      { key: "riichiDealIn", label: METRIC_LABELS.riichiDealIn, color: "#b04f91", width: 1.8 },
+      { key: "genbutsu", label: METRIC_LABELS.genbutsu, color: "#70843b", width: 1.8 }
     ];
     for (const item of series) {
-      const chip = document.createElement("span");
+      const chip = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = trendVisible.has(item.key);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) trendVisible.add(item.key);
+        else trendVisible.delete(item.key);
+        renderTrend();
+      });
       const swatch = document.createElement("i");
       swatch.style.background = item.color;
-      chip.append(swatch, document.createTextNode(item.label));
+      chip.append(checkbox, swatch, document.createTextNode(item.label));
       elements.trendLegend.append(chip);
     }
 
@@ -493,27 +614,29 @@
       const y = bottom - (value / 100) * (bottom - top);
       elements.trendChart.append(
         svgElement("line", { x1: left, y1: y, x2: right, y2: y, class: value === 50 ? "trend-midline" : "trend-gridline" }),
-        svgElement("text", { x: left - 9, y: y + 4, "text-anchor": "end", class: "trend-axis-label" }, String(value))
+        svgElement("text", { x: left - 9, y: y + 4, "text-anchor": "end", class: "trend-axis-label" }, (value / 100).toFixed(2))
       );
     }
     const xFor = (index) => points.length === 1 ? (left + right) / 2 : left + index * (right - left) / (points.length - 1);
     const yFor = (value) => bottom - Number(value) / 100 * (bottom - top);
     for (const item of series) {
+      if (!trendVisible.has(item.key)) continue;
       const valid = points.map((point, index) => ({ point, index, value: point[item.key] })).filter((entry) => Number.isFinite(entry.value));
       if (!valid.length) continue;
       const path = valid.map((entry, index) => `${index ? "L" : "M"}${xFor(entry.index).toFixed(1)},${yFor(entry.value).toFixed(1)}`).join(" ");
       elements.trendChart.append(svgElement("path", { d: path, fill: "none", stroke: item.color, "stroke-width": item.width, class: "trend-line" }));
       for (const entry of valid) {
-        const circle = svgElement("circle", { cx: xFor(entry.index), cy: yFor(entry.value), r: item.key === "overall" ? 3.5 : 2.5, fill: item.color });
+        const circle = svgElement("circle", { cx: xFor(entry.index), cy: yFor(entry.value), r: item.key === "overall" ? 3.2 : 2.2, fill: item.color });
         const date = new Date(entry.point.date).toLocaleDateString("ja-JP");
-        circle.append(svgElement("title", {}, `${date} · ${entry.point.recordIndex + 1}対局 · ${item.label} ${formatNumber(entry.value, 0)}`));
+        const rank = entry.point.actualRank ? ` · ${entry.point.actualRank}着` : "";
+        circle.append(svgElement("title", {}, `${date} · ${entry.point.title} ${entry.point.roundLabel}${rank} · ${item.label} U=${formatLuck(entry.value)}`));
         elements.trendChart.append(circle);
       }
     }
     const first = points[0], last = points[points.length - 1];
     elements.trendChart.append(
-      svgElement("text", { x: left, y: 282, "text-anchor": "start", class: "trend-axis-label" }, `${new Date(first.date).toLocaleDateString("ja-JP")} · ${first.recordIndex + 1}対局`),
-      svgElement("text", { x: right, y: 282, "text-anchor": "end", class: "trend-axis-label" }, `${new Date(last.date).toLocaleDateString("ja-JP")} · ${last.recordIndex + 1}対局`)
+      svgElement("text", { x: left, y: 282, "text-anchor": "start", class: "trend-axis-label" }, `${new Date(first.date).toLocaleDateString("ja-JP")} · ${first.roundIndex + 1}局目`),
+      svgElement("text", { x: right, y: 282, "text-anchor": "end", class: "trend-axis-label" }, `${new Date(last.date).toLocaleDateString("ja-JP")} · ${last.roundIndex + 1}局目`)
     );
   }
 
@@ -544,7 +667,7 @@
         : "対戦相手情報なし";
       fragment.querySelector(".history-context").textContent = [record.platform, gameLengthLabel(record.gameLength), record.table, opponents].filter(Boolean).join(" · ");
       const theoryRounds = (record.rounds || []).filter((round) => round.theorySupported).length;
-      fragment.querySelector(".history-meta").textContent = `${record.rounds?.length || 0}局 · 理論計算 ${theoryRounds}局`;
+      fragment.querySelector(".history-meta").textContent = `${record.actualRank ? `${record.actualRank}着 · ` : ""}${record.rounds?.length || 0}局 · 理論計算 ${theoryRounds}局`;
       fragment.querySelector(".history-main").addEventListener("click", () => {
         selectedId = record.id;
         scope = "selected";
@@ -563,19 +686,34 @@
     });
   }
 
+  function renderRecordSelector() {
+    const current = selectedId || records[0]?.id || "";
+    const options = records.map((record) => {
+      const option = document.createElement("option");
+      option.value = record.id;
+      const date = new Date(record.importedAt).toLocaleDateString("ja-JP");
+      const rank = record.actualRank ? ` · ${record.actualRank}着` : "";
+      option.textContent = `${date}${rank} · ${record.title}`;
+      return option;
+    });
+    elements.recordSelect.replaceChildren(...options);
+    elements.recordSelect.value = current;
+  }
+
   function render() {
-    const allSummary = analyzer.summarize(records);
+    const allSummary = getSummary();
     const selectedExists = records.some((record) => record.id === selectedId);
     if (!selectedExists) selectedId = null;
     if (!selectedId) scope = "all";
-    const summary = analyzer.summarize(records, scope === "selected" ? selectedId : null);
+    const summary = scope === "selected" && selectedId ? getSummary(selectedId) : allSummary;
     document.querySelector("#hero-records").textContent = records.length;
     document.querySelector("#hero-rounds").textContent = allSummary.rounds;
     document.querySelector("#hero-pool").textContent = allSummary.theorySupportedRounds;
     elements.empty.hidden = records.length > 0;
     elements.metrics.hidden = records.length === 0;
     elements.export.disabled = records.length === 0;
-    elements.scopeSwitch.hidden = !selectedId;
+    elements.dashboardControls.hidden = records.length === 0;
+    renderRecordSelector();
     elements.scopeButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.scope === scope));
     document.querySelector("#dashboard-title").textContent = scope === "selected"
       ? records.find((record) => record.id === selectedId)?.title || "牌譜サマリー"
@@ -665,16 +803,31 @@
   elements.export.addEventListener("click", downloadJson);
   elements.scopeButtons.forEach((button) => button.addEventListener("click", () => {
     scope = button.dataset.scope;
+    if (scope === "selected" && !selectedId) selectedId = elements.recordSelect.value || records[0]?.id || null;
     render();
   }));
+  elements.recordSelect.addEventListener("change", () => {
+    selectedId = elements.recordSelect.value || null;
+    scope = selectedId ? "selected" : "all";
+    render();
+  });
+  elements.trendLimit.addEventListener("change", () => {
+    trendLimit = elements.trendLimit.value;
+    renderTrend();
+  });
 
   async function initialize() {
     buildBookmarklet();
     setStatus("保存履歴を読み込み中…", "loading");
     try {
       records = await loadRecords();
+      await loadSummaryCache();
       navigator.storage?.persist?.().catch(() => false);
-      setStatus(records.length ? `${records.length}対局の保存履歴を読み込みました。` : "", records.length ? "success" : "");
+      const outdated = records.filter((record) => record.calculationVersion !== analyzer.CALCULATION_VERSION).length;
+      setStatus(outdated
+        ? `${records.length}対局を読み込みました。${outdated}対局へ実着順と最新計算を追加するため、前回の差分JSONをもう一度取り込んでください（既存履歴は置換されます）。`
+        : records.length ? `${records.length}対局の計算済み履歴を読み込みました。` : "", outdated ? "loading" : records.length ? "success" : "");
+      await new Promise((resolve) => requestAnimationFrame(resolve));
       render();
     } catch (error) {
       setStatus(`保存領域を準備できませんでした: ${error.message}`, "error");

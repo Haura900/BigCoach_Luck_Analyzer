@@ -9,6 +9,9 @@ const {
   empiricalPercentile,
   bootstrapPercentile,
   cauchyCombine,
+  recordMetricScores,
+  roundMetricScores,
+  fitOutcomeWeights,
   VERSION
 } = require("../docs/analyzer.js");
 
@@ -18,6 +21,9 @@ test("逐次確率残差は観測−期待を条件付き分散で標準化す�
   assert.equal(result.n, 2);
   assert.ok(Math.abs(result.rawZ - expected) < 1e-12);
   assert.ok(result.pValue > 0 && result.pValue <= 1);
+  const uniformLuck = result.u;
+  assert.ok(uniformLuck >= 0 && uniformLuck <= 1);
+  assert.ok(Math.abs(result.pValue - 2 * Math.min(uniformLuck, 1 - uniformLuck)) < 1e-12);
 });
 
 test("危険牌は符号を反転すると掴まないほど幸運になる", () => {
@@ -42,7 +48,7 @@ test("Cauchy結合は有効なp値だけをまとめる", () => {
 
 test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data.json"), "utf8"));
-  const record = analyzePayload(fixture, { title: "fixture" });
+  const record = analyzePayload(fixture, { title: "fixture", taskId: "fixture-task" });
   const summary = summarize([record]);
   assert.equal(record.schemaVersion, VERSION);
   assert.equal(record.rounds.length, 8);
@@ -54,6 +60,12 @@ test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
   assert.ok(summary.effective.n > 0);
   assert.equal(record.players.length, 4);
   assert.equal(record.opponents.length, 3);
+  assert.equal(record.actualRank, 3);
+  assert.equal(record.finalScore, 19700);
+  assert.equal(record.taskId, "fixture-task");
+  assert.ok(record.calculationVersion > 0);
+  assert.equal(roundMetricScores([record]).length, record.rounds.length);
+  assert.ok(record.rounds.flatMap((round) => round.riichiDealIn).every((event) => event.p > 0));
   assert.ok(Array.isArray(summary.fairness.groups));
   assert.ok(Array.isArray(summary.fairness.diagnostics));
   assert.deepEqual(summary.fairness.groups.map((item) => item.key), ["theory", "bigcoach", "all"]);
@@ -87,7 +99,38 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /id="history-player"/);
   assert.match(html, /ふだんは、こちらだけ使います/);
   assert.match(html, /id="trend-chart"/);
+  assert.match(html, /id="trend-limit"/);
+  assert.match(html, /id="record-select"/);
+  assert.match(html, /U\[0,1\]/);
   assert.doesNotMatch(app, /const target='はうらC'/);
   assert.match(app, /indexedDB\.open/);
+  assert.match(app, /analysis-cache/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
+});
+
+test("実着順との相関重みは非負で合計1になる", () => {
+  const records = [];
+  for (let repeat = 0; repeat < 6; repeat += 1) {
+    for (let rank = 1; rank <= 4; rank += 1) {
+      const wins = 4 - rank;
+      records.push({
+        id: `rank-${rank}-${repeat}`,
+        importedAt: new Date(2026, 0, records.length + 1).toISOString(),
+        actualRank: rank,
+        rounds: [{
+          effective: Array.from({ length: 4 }, (_, index) => ({ p: 0.5, y: index < wins ? 1 : 0 })),
+          defense: [], dora: [], genbutsu: [], riichiWin: [], riichiDealIn: []
+        }]
+      });
+    }
+  }
+  const rows = recordMetricScores(records);
+  const model = fitOutcomeWeights(records);
+  assert.equal(rows.length, 24);
+  assert.equal(model.sampleN, 24);
+  assert.ok(model.fitted);
+  assert.ok(model.correlation > 0.9);
+  assert.ok(Object.values(model.weights).every((weight) => weight >= 0));
+  assert.ok(Math.abs(Object.values(model.weights).reduce((sum, weight) => sum + weight, 0) - 1) < 1e-12);
+  assert.ok(model.weights.effective > 0.99);
 });

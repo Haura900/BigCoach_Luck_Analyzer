@@ -115,9 +115,12 @@
           <p class="eyebrow">LUCK DASHBOARD</p>
           <h2 id="dashboard-title">蓄積サマリー</h2>
         </div>
-        <div class="scope-switch" id="scope-switch" hidden>
-          <button class="is-active" data-scope="all">全牌譜</button>
-          <button data-scope="selected">選択牌譜</button>
+        <div class="dashboard-controls" id="dashboard-controls" hidden>
+          <select id="record-select" aria-label="表示する牌譜"></select>
+          <div class="scope-switch" id="scope-switch">
+            <button class="is-active" data-scope="all">全牌譜</button>
+            <button data-scope="selected">選択牌譜</button>
+          </div>
         </div>
       </div>
 
@@ -135,17 +138,18 @@
             <p id="overall-label" class="overall-label">—</p>
           </div>
           <div class="overall-score">
-            <strong id="overall-score">—</strong><small>/ 100</small>
+            <strong id="overall-score">—</strong><small>/ 1</small>
           </div>
           <div class="overall-breakdown">
             <p id="overall-detail"></p>
+            <p id="overall-model" class="overall-model"></p>
             <div id="overall-components" class="overall-components"></div>
           </div>
         </article>
 
         <article class="metric-card metric-deal">
           <div class="metric-head"><span>01</span><h3>配牌時和了率</h3><i>経験分布</i></div>
-          <div class="metric-value"><strong id="deal-percentile">—</strong><small>percentile</small></div>
+          <div class="metric-value"><strong id="deal-percentile">—</strong><small>U[0,1]</small></div>
           <div class="meter"><span id="deal-meter"></span></div>
           <p id="deal-detail" class="metric-detail"></p>
           <p class="metric-note">初回意思決定時の和了予測値そのものを経験分布で順位化。実際に和了したかは使いません。</p>
@@ -153,7 +157,7 @@
 
         <article class="metric-card metric-rank">
           <div class="metric-head"><span>02</span><h3>配牌時平着変動</h3><i>経験分布</i></div>
-          <div class="metric-value"><strong id="rank-percentile">—</strong><small>percentile</small></div>
+          <div class="metric-value"><strong id="rank-percentile">—</strong><small>U[0,1]</small></div>
           <div class="meter"><span id="rank-meter"></span></div>
           <p id="rank-detail" class="metric-detail"></p>
           <p class="metric-note">配牌直後の順位確率から求めた期待順位と、配牌前の現在順位との差。プラスほど有利な配牌。</p>
@@ -161,7 +165,7 @@
 
         <article class="metric-card metric-defense">
           <div class="metric-head"><span>03</span><h3>放銃予実幅</h3><i>経験分布</i></div>
-          <div class="metric-value"><strong id="defense-percentile">—</strong><small>percentile</small></div>
+          <div class="metric-value"><strong id="defense-percentile">—</strong><small>U[0,1]</small></div>
           <div class="meter"><span id="defense-meter"></span></div>
           <p id="defense-detail" class="metric-detail"></p>
           <p class="metric-note">被リーチ・被2副露時だけを対象に、予測放銃率−実績を局単位で経験分布と比較。</p>
@@ -169,7 +173,7 @@
 
         <article class="metric-card metric-dora">
           <div class="metric-head"><span>04</span><h3>ドラツモ率</h3><i>逐次理論値</i></div>
-          <div class="metric-value"><strong id="dora-percentile">—</strong><small>luck index</small></div>
+          <div class="metric-value"><strong id="dora-percentile">—</strong><small>U[0,1]</small></div>
           <div class="sigma-line"><span></span><b id="dora-marker"></b></div>
           <p id="dora-detail" class="metric-detail"></p>
           <p class="metric-note">全員の初期手牌と既出牌を除いた残り牌から毎ツモ再計算。赤ドラも含みます。</p>
@@ -177,7 +181,7 @@
 
         <article class="metric-card metric-effective">
           <div class="metric-head"><span>05</span><h3>有効牌ツモ率</h3><i>逐次理論値</i></div>
-          <div class="metric-value"><strong id="effective-percentile">—</strong><small>luck index</small></div>
+          <div class="metric-value"><strong id="effective-percentile">—</strong><small>U[0,1]</small></div>
           <div class="sigma-line"><span></span><b id="effective-marker"></b></div>
           <p id="effective-detail" class="metric-detail"></p>
           <p class="metric-note">通常形・七対子・国士を含む向聴数が小さくなる牌を、各自摸直前の手牌から再計算。</p>
@@ -185,23 +189,23 @@
 
         <article class="metric-card metric-riichi-win">
           <div class="metric-head"><span>06</span><h3>リーチ時自明和了率</h3><i>逐次理論値</i></div>
-          <div class="metric-value"><strong id="riichi-win-percentile">—</strong><small>luck index</small></div>
+          <div class="metric-value"><strong id="riichi-win-percentile">—</strong><small>U[0,1]</small></div>
           <div class="sigma-line"><span></span><b id="riichi-win-marker"></b></div>
           <p id="riichi-win-detail" class="metric-detail"></p>
           <p class="metric-note">自分のツモと、双方リーチ時の相手ツモ切りについて、残り和了牌数から計算。</p>
         </article>
 
         <article class="metric-card metric-riichi-danger">
-          <div class="metric-head"><span>07</span><h3>リーチ時危険牌率</h3><i>逐次理論値</i></div>
-          <div class="metric-value"><strong id="riichi-danger-percentile">—</strong><small>luck index</small></div>
+          <div class="metric-head"><span>07</span><h3>リーチ後危険牌回避度</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="riichi-danger-percentile">—</strong><small>U[0,1]</small></div>
           <div class="sigma-line"><span></span><b id="riichi-danger-marker"></b></div>
           <p id="riichi-danger-detail" class="metric-detail"></p>
-          <p class="metric-note">自分がリーチ中、完全情報でテンパイ形の相手の待ちをつかむ率。自分の和了牌は競合事象として除外。</p>
+          <p class="metric-note">自分がリーチ中、テンパイ形の相手の待ちを掴まなかった度合い。U=1.000は危険牌率100%ではありません。自分の和了牌は競合事象として除外。相手の捨て牌によるフリテンは除外しますが、役と一時フリテンは未判定です。</p>
         </article>
 
         <article class="metric-card metric-genbutsu">
           <div class="metric-head"><span>08</span><h3>被リーチ時現物掴み率</h3><i>逐次理論値</i></div>
-          <div class="metric-value"><strong id="genbutsu-percentile">—</strong><small>luck index</small></div>
+          <div class="metric-value"><strong id="genbutsu-percentile">—</strong><small>U[0,1]</small></div>
           <div class="sigma-line"><span></span><b id="genbutsu-marker"></b></div>
           <p id="genbutsu-detail" class="metric-detail"></p>
           <p class="metric-note">相手リーチ成立後の自分のツモが現物かを評価。複数リーチ時は全リーチ者に共通する現物だけを数えます。</p>
@@ -215,13 +219,20 @@
           <p class="eyebrow">LUCK TREND</p>
           <h2 id="trend-title">運量の推移</h2>
         </div>
-        <span class="trend-caption">古い牌譜から加えた累積指数</span>
+        <label class="trend-limit">表示する局数
+          <select id="trend-limit">
+            <option value="25">25局</option>
+            <option value="50" selected>50局</option>
+            <option value="100">100局</option>
+            <option value="all">全局</option>
+          </select>
+        </label>
       </div>
       <div id="trend-legend" class="trend-legend"></div>
       <div class="trend-chart-wrap">
-        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と4系統の累積推移"></svg>
+        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と8指標の局別推移"></svg>
       </div>
-      <p class="trend-note">最大24時点を表示します。値がない区間は、必要な局数・対象機会に達していません。</p>
+      <p class="trend-note">各点はその局単体の幸運度です。チェックを外すと系列を隠せます。値がない指標は対象機会がありません。</p>
     </section>
 
     <section id="fairness" class="fairness section-shell" aria-labelledby="fairness-title">
