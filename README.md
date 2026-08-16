@@ -13,7 +13,7 @@ BigCoachの解析JSONから、技術に依存しにくい8つの運量と牌山�
 3. ログイン済みBigCoachの `https://gokujan.com/account/history` でそのブックマークを実行します。
 4. ダウンロードされた差分JSONをLuck Analyzerへ読み込みます。
 
-初回は対象プレイヤーの過去の実戦牌譜、次回以降は未取得分だけを保存します。取得済みタスクIDはBigCoach側オリジンの `localStorage` に、解析結果はLuck Analyzer側の `localStorage` に保存されます。
+初回は対象プレイヤーの過去の実戦牌譜、次回以降は未取得分だけを保存します。取得済みタスクIDはBigCoach側オリジンの `localStorage` に保存します。Luck Analyzer側では、元の巨大JSONを保持せず、8指標と履歴表示に必要な解析後データだけをIndexedDBへ対局単位で保存します。
 
 単局取得、URL、JSON貼り付けは「1局だけ取り込む／手動で取り込む」の中にあります。
 
