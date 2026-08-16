@@ -454,8 +454,8 @@
         ? `対戦: ${record.opponents.join("・")}`
         : "対戦相手情報なし";
       fragment.querySelector(".history-context").textContent = [record.platform, gameLengthLabel(record.gameLength), record.table, opponents].filter(Boolean).join(" · ");
-      const summary = analyzer.summarize(records, record.id);
-      fragment.querySelector(".history-meta").textContent = `${summary.rounds}局 · 総合 ${formatNumber(summary.overall.score, 0)} · 有効牌 ${formatNumber(summary.effective.percentile, 0)}`;
+      const theoryRounds = (record.rounds || []).filter((round) => round.theorySupported).length;
+      fragment.querySelector(".history-meta").textContent = `${record.rounds?.length || 0}局 · 理論計算 ${theoryRounds}局`;
       fragment.querySelector(".history-main").addEventListener("click", () => {
         selectedId = record.id;
         scope = "selected";
