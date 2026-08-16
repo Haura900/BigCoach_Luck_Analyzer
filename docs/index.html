@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f1917">
-  <meta name="description" content="BigCoachの解析JSONから、技術に依存しにくい8つの運量と牌山の偏りを端末内だけで検証します。">
+  <meta name="description" content="BigCoachの解析JSONから、自分と他家の技術に依存しにくい19の運量と牌山の偏りを端末内だけで検証します。">
   <title>BigCoach Luck Analyzer</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -127,7 +127,7 @@
       <div id="empty-state" class="empty-state">
         <span>◌</span>
         <h3>まだ解析データがありません</h3>
-        <p>上の取り込み欄からJSONを追加すると、8つの運量と独立性検定がここに表示されます。</p>
+        <p>上の取り込み欄からJSONを追加すると、自分と他家の19の運量と独立性検定がここに表示されます。</p>
       </div>
 
       <div id="metrics" class="metrics" hidden>
@@ -210,6 +210,94 @@
           <p id="genbutsu-detail" class="metric-detail"></p>
           <p class="metric-note">相手リーチ成立後の自分のツモが現物かを評価。複数リーチ時は全リーチ者に共通する現物だけを数えます。</p>
         </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>09</span><h3>テンパイ到達ツモ</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="self-tenpai-entry-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="self-tenpai-entry-marker"></b></div>
+          <p id="self-tenpai-entry-detail" class="metric-detail"></p>
+          <p class="metric-note">自分が一向聴のとき、テンパイへ進む牌を引けた度合い。手牌選択後の状態を条件にするため、打牌技術そのものは採点しません。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>10</span><h3>テンパイ後和了牌ツモ</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="self-tenpai-win-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="self-tenpai-win-marker"></b></div>
+          <p id="self-tenpai-win-detail" class="metric-detail"></p>
+          <p class="metric-note">リーチ・ダマ・副露を問わず、テンパイ後の自ツモが理論上の和了牌だったかを集計。役の有無は未判定です。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>11</span><h3>リーチ時他家掴ませ率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="riichi-hit-opponent-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="riichi-hit-opponent-marker"></b></div>
+          <p id="riichi-hit-opponent-detail" class="metric-detail"></p>
+          <p class="metric-note">自分のリーチ後、他家のツモが自分の和了牌だった度合い。実際に切ったかは使わず、掴んだ時点だけを評価します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>12</span><h3>自分配牌ドラ</h3><i>有限母集団</i></div>
+          <div class="metric-value"><strong id="initial-dora-self-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="initial-dora-self-marker"></b></div>
+          <p id="initial-dora-self-detail" class="metric-detail"></p>
+          <p class="metric-note">表ドラ表示牌を条件に、配牌へ入った通常ドラと赤ドラの枚数を無作為配牌の理論分布と比較します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>13</span><h3>自分裏ドラ運</h3><i>有限母集団</i></div>
+          <div class="metric-value"><strong id="ura-self-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="ura-self-marker"></b></div>
+          <p id="ura-self-detail" class="metric-detail"></p>
+          <p class="metric-note">自分のリーチ和了時、実際の裏ドラ枚数と、残り牌から求めた裏表示牌抽選の期待枚数・有限母集団分散を比較します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>14</span><h3>他家配牌ドラ回避</h3><i>有限母集団</i></div>
+          <div class="metric-value"><strong id="initial-dora-opponent-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="initial-dora-opponent-marker"></b></div>
+          <p id="initial-dora-opponent-detail" class="metric-detail"></p>
+          <p class="metric-note">他家3人の配牌へ入った通常ドラ・赤ドラが少なかったほど、自分にとって幸運として評価します。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>15</span><h3>他家ドラツモ回避</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="opponent-dora-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="opponent-dora-marker"></b></div>
+          <p id="opponent-dora-detail" class="metric-detail"></p>
+          <p class="metric-note">他家の全ツモについて通常ドラ・赤ドラの理論確率を再計算し、他家が引かなかったほど幸運とします。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>16</span><h3>他家テンパイ到達回避</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="opponent-tenpai-entry-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="opponent-tenpai-entry-marker"></b></div>
+          <p id="opponent-tenpai-entry-detail" class="metric-detail"></p>
+          <p class="metric-note">他家が一向聴のとき、テンパイへ進む牌を引かなかった度合い。全員の手牌が見える解析JSONだから計算できます。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>17</span><h3>他家和了牌ツモ回避</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="opponent-tenpai-win-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="opponent-tenpai-win-marker"></b></div>
+          <p id="opponent-tenpai-win-detail" class="metric-detail"></p>
+          <p class="metric-note">他家がテンパイ中に和了牌を自ツモしなかった度合い。役と一時フリテンは未判定です。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>18</span><h3>他家リーチ和了回避</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="opponent-riichi-win-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="opponent-riichi-win-marker"></b></div>
+          <p id="opponent-riichi-win-detail" class="metric-detail"></p>
+          <p class="metric-note">他家リーチ者が自ツモで和了牌を引かなかった度合い。リーチ後なので手替わりや選択技術を含みません。</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-head"><span>19</span><h3>他家裏ドラ回避</h3><i>有限母集団</i></div>
+          <div class="metric-value"><strong id="ura-opponent-percentile">—</strong><small>U[0,1]</small></div>
+          <div class="sigma-line"><span></span><b id="ura-opponent-marker"></b></div>
+          <p id="ura-opponent-detail" class="metric-detail"></p>
+          <p class="metric-note">他家のリーチ和了時に裏ドラが期待より少なかったほど、自分にとって幸運として評価します。</p>
+        </article>
       </div>
     </section>
 
@@ -230,7 +318,7 @@
       </div>
       <div id="trend-legend" class="trend-legend"></div>
       <div class="trend-chart-wrap">
-        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と8指標の局別推移"></svg>
+        <svg id="trend-chart" viewBox="0 0 920 300" role="img" aria-label="総合運と19指標の局別推移"></svg>
       </div>
       <p class="trend-note">各点はその局単体の幸運度です。チェックを外すと系列を隠せます。値がない指標は対象機会がありません。</p>
     </section>

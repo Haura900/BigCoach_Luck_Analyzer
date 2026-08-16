@@ -33,6 +33,12 @@ test("危険牌は符号を反転すると掴まないほど幸運になる", ()
   assert.ok(result.percentile > 50);
 });
 
+test("裏ドラなどの有限母集団分散を逐次残差に使える", () => {
+  const result = martingale([{ p: 1.2, y: 2, v: 0.4 }]);
+  assert.equal(result.variance, 0.4);
+  assert.ok(Math.abs(result.rawZ - 0.8 / Math.sqrt(0.4)) < 1e-12);
+});
+
 test("経験percentileは同順位の中点を使う", () => {
   assert.equal(empiricalPercentile(2, [1, 2, 2, 3]), 50);
   const percentile = bootstrapPercentile([2, 3], [1, 2, 3, 4], "fixed");
@@ -46,7 +52,7 @@ test("Cauchy結合は有効なp値だけをまとめる", () => {
   assert.ok(combined > 0 && combined < 0.2);
 });
 
-test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
+test("BigCoach実例から19指標と理論ツモを抽出できる", () => {
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data.json"), "utf8"));
   const record = analyzePayload(fixture, { title: "fixture", taskId: "fixture-task" });
   const summary = summarize([record]);
@@ -58,6 +64,11 @@ test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
   assert.ok(summary.defense.events > 0);
   assert.ok(summary.dora.n > 0);
   assert.ok(summary.effective.n > 0);
+  assert.ok(summary.opponentDora.n > 0);
+  assert.ok(summary.selfTenpaiEntry.n > 0);
+  assert.ok(summary.opponentTenpaiEntry.n > 0);
+  assert.ok(summary.initialDoraSelf.n > 0);
+  assert.ok(summary.initialDoraOpponent.n > 0);
   assert.equal(record.players.length, 4);
   assert.equal(record.opponents.length, 3);
   assert.equal(record.actualRank, 3);
@@ -70,7 +81,7 @@ test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
   assert.ok(Array.isArray(summary.fairness.diagnostics));
   assert.deepEqual(summary.fairness.groups.map((item) => item.key), ["theory", "bigcoach", "all"]);
   assert.equal(summary.fairness.groups.find((item) => item.key === "all").pValue, null);
-  assert.equal(summary.overall.totalComponents, 8);
+  assert.equal(summary.overall.totalComponents, 19);
 });
 
 test("同じ元牌譜はモデル確率が変わってもgameIdが同じ", () => {
@@ -101,10 +112,14 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /id="trend-chart"/);
   assert.match(html, /id="trend-limit"/);
   assert.match(html, /id="record-select"/);
+  assert.match(html, /id="ura-self-percentile"/);
+  assert.match(html, /id="opponent-tenpai-win-percentile"/);
+  assert.match(html, /総合運と19指標/);
   assert.match(html, /U\[0,1\]/);
   assert.doesNotMatch(app, /const target='はうらC'/);
   assert.match(app, /indexedDB\.open/);
   assert.match(app, /analysis-cache/);
+  assert.match(app, /validationCorrelation/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });
 
