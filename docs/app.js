@@ -7,7 +7,7 @@
   const DATABASE_VERSION = 2;
   const RECORD_STORE = "records";
   const CACHE_STORE = "analysis-cache";
-  const CACHE_VERSION = 6;
+  const CACHE_VERSION = 7;
   const analyzer = window.LuckAnalyzer;
   let records = [];
   let databasePromise = null;
@@ -15,12 +15,8 @@
   let selectedId = null;
   let scope = "all";
   let trendLimit = "50";
-  const trendVisible = new Set([
-    "overall", "deal", "rankDeal", "defense", "dora", "effective", "effective2", "effective1", "riichiWin", "riichiDealIn", "genbutsu",
-    "riichiHitOpponent", "uraSelf", "opponentDora", "opponentRiichiWin", "uraOpponent",
-    "selfTenpaiWin", "opponentTenpaiWin", "selfTenpaiEntry", "opponentTenpaiEntry", "initialDoraSelf", "initialDoraOpponent",
-    "outcomeLuck", "tsumoLuck", "ronLuck", "dealInAvoidLuck", "otherWinAvoidLuck", "chancePoints"
-  ]);
+  const trendVisible = new Set(["overall"]);
+  let trendSelectionInitialized = false;
   const METRIC_LABELS = {
     deal: "配牌時和了率",
     rankDeal: "配牌時平着変動",
@@ -535,7 +531,7 @@
             : overall.score <= 30 ? "やや運が悪い" : "おおむね標準的";
     document.querySelector("#overall-detail").textContent = overall.score == null
       ? "総合運に入れられる指標がまだありません。"
-      : `${overall.included.length}/${overall.totalComponents}指標のU[0,1]を、実着順との相関が最大になる非負の係数で加重。Uは上振れ方向の累積確率で、両側p値ではありません。`;
+      : `${overall.included.length}/${overall.totalComponents}指標を非負係数で加重し、その加重点を${overall.distributionN}対局の同時経験分布へ通したU[0,1]です。指標間の重複・相関も保ちます。Uは上振れ方向の累積確率で、両側p値は${formatNumber(overall.pValue, 3)}です。`;
     const weightText = Object.entries(overall.weights || {})
       .filter(([, weight]) => Number(weight) >= 0.0005)
       .sort((left, right) => Number(right[1]) - Number(left[1]))
@@ -628,6 +624,19 @@
     return total > 0 ? entries.reduce((sum, [key, weight]) => sum + (Number.isFinite(scores?.[key]) ? scores[key] : 50) * Number(weight), 0) / total : null;
   }
 
+  function initializeTrendSelection(weights) {
+    if (trendSelectionInitialized) return;
+    const topFive = Object.entries(weights || {})
+      .filter(([key, weight]) => key in METRIC_LABELS && Number.isFinite(Number(weight)))
+      .sort((left, right) => Number(right[1]) - Number(left[1]))
+      .slice(0, 5)
+      .map(([key]) => key);
+    trendVisible.clear();
+    trendVisible.add("overall");
+    topFive.forEach((key) => trendVisible.add(key));
+    trendSelectionInitialized = true;
+  }
+
   function renderTrend() {
     elements.trendSection.hidden = records.length === 0;
     elements.trendChart.replaceChildren();
@@ -639,14 +648,17 @@
       .sort((left, right) => left.time - right.time || right.index - left.index)
       .map((item) => item.record);
     const model = analyzer.fitOutcomeWeights(chronological);
-    const allPoints = analyzer.roundMetricScores(chronological).map((row, roundIndex) => ({
+    initializeTrendSelection(model.weights);
+    const roundScores = analyzer.roundMetricScores(chronological);
+    const rawOverallScores = roundScores.map((row) => weightedRecordScore(row.scores, model.weights));
+    const allPoints = roundScores.map((row, roundIndex) => ({
       roundIndex,
       date: row.importedAt,
       title: row.title,
       roundLabel: row.roundLabel,
       actualRank: row.actualRank,
       ...row.scores,
-      overall: weightedRecordScore(row.scores, model.weights)
+      overall: analyzer.empiricalPercentile(rawOverallScores[roundIndex], rawOverallScores)
     }));
     const limit = trendLimit === "all" ? allPoints.length : Number(trendLimit);
     const points = allPoints.slice(-Math.max(1, limit));

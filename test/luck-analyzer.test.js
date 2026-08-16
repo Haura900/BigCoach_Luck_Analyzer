@@ -85,6 +85,8 @@ test("BigCoach実例から27指標と理論ツモを抽出できる", () => {
   assert.equal(summary.fairness.groups.find((item) => item.key === "all").pValue, null);
   assert.ok(record.rounds.some((round) => round.outcomeLuck.length > 0));
   assert.equal(summary.overall.totalComponents, 27);
+  assert.equal(summary.overall.u, 0.5);
+  assert.equal(summary.overall.distributionN, 1);
 });
 
 test("同じ元牌譜はモデル確率が変わってもgameIdが同じ", () => {
@@ -120,11 +122,15 @@ test("履歴差分のプレイヤー名は画面入力から生成し、固定�
   assert.match(html, /総合運と27指標/);
   assert.match(html, /2シャンテン時有効牌ツモ率/);
   assert.match(html, /確率決着収支/);
+  assert.match(html, /重みが大きい上位5指標/);
   assert.match(html, /U\[0,1\]/);
   assert.doesNotMatch(app, /const target='はうらC'/);
   assert.match(app, /indexedDB\.open/);
   assert.match(app, /analysis-cache/);
   assert.match(app, /validationCorrelation/);
+  assert.match(app, /initializeTrendSelection\(model\.weights\)/);
+  assert.match(app, /\.slice\(0, 5\)/);
+  assert.match(app, /empiricalPercentile\(rawOverallScores\[roundIndex\], rawOverallScores\)/);
   assert.doesNotMatch(app, /localStorage\.setItem\(STORAGE_KEY/);
 });
 

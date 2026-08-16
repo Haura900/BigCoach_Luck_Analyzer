@@ -1112,11 +1112,16 @@
       return { ...family, included: included.length > 0, score: mean(included.map((item) => item.score)) };
     });
     const outcomeModel = fitOutcomeWeights(allRecords);
-    const hasScore = individual.some((item) => item.included && Number.isFinite(item.score));
-    const weightTotal = individual.reduce((sum, item) => sum + Number(outcomeModel.weights[item.key] || 0), 0);
-    const overallScore = hasScore && weightTotal > 0
-      ? individual.reduce((sum, item) => sum + (item.included && Number.isFinite(item.score) ? item.score : 50) * Number(outcomeModel.weights[item.key] || 0), 0) / weightTotal
-      : null;
+    const recordScores = recordMetricScores(allRecords);
+    const overallPool = recordScores.map((row) => weightedMetricScore(row.scores, outcomeModel.weights));
+    const selectedIds = new Set(selected.map((record) => record.id));
+    const overallDistribution = empiricalMetric(
+      recordScores.filter((row) => selectedIds.has(row.id)).map((row) => weightedMetricScore(row.scores, outcomeModel.weights)),
+      overallPool,
+      EXPERIENCE_MIN_POOL,
+      `overall:${selectedId || "all"}`
+    );
+    const overallScore = overallDistribution.percentile;
 
     const effectiveRoundRows = roundRows(selected, (round) => martingale(round.effective || [], 1).luckZ);
     const seatTest = seatPermutationTest(effectiveRoundRows);
@@ -1222,6 +1227,9 @@
         validationFolds: outcomeModel.validationFolds,
         ridgePenalty: outcomeModel.ridgePenalty,
         correlationN: outcomeModel.sampleN,
+        rawScore: overallDistribution.value,
+        distributionN: overallDistribution.poolN,
+        pValue: overallDistribution.pValue,
         fittedWeights: outcomeModel.fitted,
         included: individual.filter((item) => item.included),
         excluded: individual.filter((item) => !item.included),
